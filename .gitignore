@@ -11,4 +11,7 @@ wheels/
 
 checkpoints
 
+eval_video.mp4
+training_loss.png
+
 

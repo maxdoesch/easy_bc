@@ -16,7 +16,7 @@ import orbax.checkpoint as ocp
 from torch.utils.data import DataLoader
 
 from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotDataset
-from lerobot.datasets.utils import dataset_to_policy_features
+from lerobot.datasets.utils import dataset_to_policy_features, write_stats
 from lerobot.configs.types import FeatureType
 
 from easy_bc.configuration_regression import RegressionConfig
@@ -96,6 +96,9 @@ def main(cfg: TrainConfig):
         "%Y%m%d_%H%M%S"
     )
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    # save dataset stats
+    write_stats(dataset_metadata.stats, ckpt_dir)  # pyright: ignore
 
     options = ocp.CheckpointManagerOptions(
         save_interval_steps=cfg.checkpoint_freq,

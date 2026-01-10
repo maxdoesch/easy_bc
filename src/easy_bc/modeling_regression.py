@@ -1,5 +1,4 @@
 import einops
-import jax.numpy as jnp
 from flax import nnx
 
 from easy_bc.configuration_regression import RegressionConfig
@@ -131,10 +130,6 @@ class RegressionPolicy(nnx.Module):
         self.config.out_feature_dim = action_dim
 
         self.encoder = RGBEncoder(config, rngs)
-
-    def sample_action(self, x: jnp.ndarray) -> jnp.ndarray:
-        x = self.encoder(x)
-        return x
 
     def __call__(self, x):
         img_key = next(iter(self.config.image_features.keys()))
