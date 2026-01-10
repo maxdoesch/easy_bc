@@ -1,7 +1,7 @@
 import einops
 from flax import nnx
 
-from easy_bc.configuration_regression import RegressionConfig
+from easy_bc.policies.regression.configuration_regression import RegressionConfig
 
 
 class EncoderStem(nnx.Module):

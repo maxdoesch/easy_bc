@@ -9,13 +9,13 @@ from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotData
 from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.configs.types import FeatureType
 
-from easy_bc.modeling_regression import (
+from easy_bc.policies.regression.modeling_regression import (
     EncoderStem,
     EncoderBlock,
     RGBEncoder,
     RegressionPolicy,
 )
-from easy_bc.configuration_regression import RegressionConfig
+from easy_bc.policies.regression.configuration_regression import RegressionConfig
 
 
 def _keep_keys(config: RegressionConfig) -> set[str]:

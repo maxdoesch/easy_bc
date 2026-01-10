@@ -2,7 +2,7 @@ from typing import Any
 
 import torch
 
-from easy_bc.configuration_regression import RegressionConfig
+from easy_bc.policies.regression.configuration_regression import RegressionConfig
 from lerobot.processor import (
     NormalizerProcessorStep,
     PolicyAction,

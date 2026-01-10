@@ -19,9 +19,11 @@ from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotData
 from lerobot.datasets.utils import dataset_to_policy_features, write_stats
 from lerobot.configs.types import FeatureType
 
-from easy_bc.configuration_regression import RegressionConfig
-from easy_bc.modeling_regression import RegressionPolicy
-from easy_bc.processors_regression import make_processors_regression_pre_post_processors
+from easy_bc.policies.regression.configuration_regression import RegressionConfig
+from easy_bc.policies.regression.modeling_regression import RegressionPolicy
+from easy_bc.policies.regression.processors_regression import (
+    make_processors_regression_pre_post_processors,
+)
 
 
 @dataclass

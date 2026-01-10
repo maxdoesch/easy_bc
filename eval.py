@@ -11,9 +11,11 @@ import jax.numpy as jnp
 from flax import nnx
 import orbax.checkpoint as ocp
 
-from easy_bc.modeling_regression import RegressionPolicy
-from easy_bc.configuration_regression import RegressionConfig
-from easy_bc.processors_regression import make_processors_regression_pre_post_processors
+from easy_bc.policies.regression.modeling_regression import RegressionPolicy
+from easy_bc.policies.regression.configuration_regression import RegressionConfig
+from easy_bc.policies.regression.processors_regression import (
+    make_processors_regression_pre_post_processors,
+)
 
 
 from lerobot.envs.factory import make_env, make_env_config
