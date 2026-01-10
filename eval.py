@@ -1,13 +1,10 @@
 import os
-import torch
 import tyro
 import imageio
 from pathlib import Path
 import numpy as np
 from dataclasses import dataclass
 
-import jax
-import jax.numpy as jnp
 from flax import nnx
 import orbax.checkpoint as ocp
 
@@ -16,28 +13,30 @@ from easy_bc.policies.regression.configuration_regression import RegressionConfi
 from easy_bc.policies.regression.processors_regression import (
     make_processors_regression_pre_post_processors,
 )
+from easy_bc.evaluation.evaluation import EvaluatorConfig, Evaluator
 
 
-from lerobot.envs.factory import make_env, make_env_config
+from lerobot.envs.factory import make_env
 from lerobot.datasets.utils import load_stats
 from lerobot.configs.types import FeatureType
 from lerobot.envs.utils import env_to_policy_features, preprocess_observation
-
-ENV_NAME = "pusht"
+from lerobot.envs.factory import PushtEnv
 
 
 @dataclass
-class EvalConfig:
+class EvalCfg:
     checkpoint_path: str
     checkpoint: int
+    evaluator: EvaluatorConfig
+    n_envs: int = 1
 
 
-def main(cfg: EvalConfig):
-    env_cfg = make_env_config(ENV_NAME)
-    envs_dict = make_env(env_cfg)
+def main(cfg: EvalCfg):
+    env_cfg = PushtEnv()
+    envs_dict = make_env(env_cfg, n_envs=cfg.n_envs)
 
     suite_name = next(iter(envs_dict))
-    env = envs_dict[suite_name][0]
+    envs = envs_dict[suite_name][0]
 
     # dict_keys(['action', 'observation.state', 'observation.image'])
     features = env_to_policy_features(env_cfg)
@@ -78,35 +77,23 @@ def main(cfg: EvalConfig):
     policy_state = restored["policy"]
     policy = nnx.merge(policy_gd, policy_state)
 
-    # dict_keys(['agent_pos', 'pixels'])
-    obs, info = env.reset()
-    done = np.zeros(env.num_envs, dtype=bool)
-    total_reward = np.zeros(env.num_envs)
+    policy.eval()
 
-    images = []
-    while not done.all():
-        observation = preprocess_observation(obs)
-        observation = preprocessor(observation)
+    evaluator = Evaluator(envs=envs, cfg=cfg.evaluator)
+    total_returns, evaluation_images = evaluator.evaluate(
+        policy=policy,
+        preprocessor=lambda x: preprocessor(preprocess_observation(x)),
+        postprocessor=postprocessor,
+    )
 
-        observation = jax.tree_util.tree_map(jnp.asarray, observation)
+    imageio.mimsave(
+        "evaluation.mp4",
+        [img for episode in evaluation_images for img in episode],
+        fps=env_cfg.fps,
+    )
 
-        action = policy(observation)
-
-        action = torch.tensor(np.array(action), device="cpu")
-
-        action = postprocessor(action)
-        obs, reward, terminated, truncated, info = env.step(action)
-        total_reward += reward
-        done = terminated | truncated
-
-        images.append(obs["pixels"])
-
-    print(f"Average reward: {total_reward.mean():.2f}")
-    env.close()
-
-    # save video
-    video = np.concatenate(images, axis=0)  # (N, H, W, C)
-    imageio.mimwrite("eval_video.mp4", video, fps=10)  # pyright: ignore
+    print(f"Average reward: {np.mean(total_returns):.2f}")
+    envs.close()
 
 
 if __name__ == "__main__":
