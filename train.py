@@ -1,11 +1,12 @@
 import os
 import tyro
+from tqdm import tqdm
+import wandb
 from pathlib import Path
 from datetime import datetime
-from typing import Dict
-from dataclasses import dataclass
+from typing import Dict, Optional
+from dataclasses import dataclass, field
 
-from matplotlib import pyplot as plt
 
 import jax
 import flax.nnx as nnx
@@ -18,40 +19,46 @@ from torch.utils.data import DataLoader
 from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotDataset
 from lerobot.datasets.utils import dataset_to_policy_features, write_stats
 from lerobot.configs.types import FeatureType
+from lerobot.envs.factory import make_env, make_env_config
+from lerobot.envs.utils import preprocess_observation
 
 from easy_bc.policies.regression.configuration_regression import RegressionConfig
 from easy_bc.policies.regression.modeling_regression import RegressionPolicy
 from easy_bc.policies.regression.processors_regression import (
     make_processors_regression_pre_post_processors,
 )
+from easy_bc.evaluation.evaluation import Evaluator, EvaluatorConfig
 
 
-@dataclass
+@dataclass()
 class TrainConfig:
-    repo_id: str
+    project_name: str = "easy_bc"
+    exp_name: str = tyro.MISSING
+
+    repo_id: str = tyro.MISSING
     train_steps: int = 10_000
     log_freq: int = 100
+    eval_freq: int = 5_000
 
     checkpoint_freq: int = 1_000
-
     checkpoint_dir: str = "checkpoints/"
 
-    batch_size: int = 1
+    batch_size: int = 32
 
-
-def loss_fn(policy: RegressionPolicy, batch: Dict[str, jnp.ndarray]) -> jnp.ndarray:
-    pred_actions = policy(batch)
-    actions = batch["action"]
-
-    loss = optax.l2_loss(predictions=pred_actions, targets=actions).mean()
-
-    return loss
+    env_id: Optional[str] = None
+    num_envs: int = 1
+    evaluator: EvaluatorConfig = field(default_factory=lambda: EvaluatorConfig())
 
 
 @nnx.jit
 def train_step(
     policy: RegressionPolicy, batch: Dict[str, jnp.ndarray], optimizer: nnx.Optimizer
 ) -> float:
+    def loss_fn(policy: RegressionPolicy, batch: Dict[str, jnp.ndarray]) -> jnp.ndarray:
+        chunked_loss = policy.compute_loss(batch)
+
+        return chunked_loss.mean()
+
     grad_fn = nnx.value_and_grad(loss_fn, has_aux=False)
     loss, grads = grad_fn(policy, batch)
     optimizer.update(policy, grads)
@@ -60,6 +67,11 @@ def train_step(
 
 
 def main(cfg: TrainConfig):
+    wandb.init(
+        project=cfg.project_name,
+        name=cfg.exp_name,
+    )
+
     dataset_metadata = LeRobotDatasetMetadata(cfg.repo_id)
     features = dataset_to_policy_features(dataset_metadata.features)
 
@@ -75,7 +87,7 @@ def main(cfg: TrainConfig):
     )
 
     policy = RegressionPolicy(config=regression_config, rngs=nnx.Rngs(0))
-    pre_processor, _ = make_processors_regression_pre_post_processors(
+    preprocessor, postprocessor = make_processors_regression_pre_post_processors(
         regression_config,
         dataset_stats=dataset_metadata.stats,  # pyright: ignore
     )
@@ -89,6 +101,16 @@ def main(cfg: TrainConfig):
         shuffle=True,
         drop_last=True,
     )
+
+    evaluator = None
+    if cfg.env_id:
+        env_cfg = make_env_config(cfg.env_id)
+        eval_envs_dict = make_env(env_cfg, n_envs=cfg.num_envs)
+
+        suite_name = next(iter(eval_envs_dict))
+        eval_envs = eval_envs_dict[suite_name][0]
+
+        evaluator = Evaluator(envs=eval_envs, cfg=cfg.evaluator)
 
     optimizer = nnx.Optimizer(policy, optax.adamw(learning_rate=1e-3), wrt=nnx.Param)
 
@@ -109,10 +131,11 @@ def main(cfg: TrainConfig):
 
     losses = []
     i = 0
+    pbar = tqdm(total=cfg.train_steps, desc="Training")
     with ocp.CheckpointManager(str(ckpt_dir), options=options) as mngr:
         while True:
             for batch in dataloader:
-                batch = pre_processor(batch)
+                batch = preprocessor(batch)
                 keep_keys = set(regression_config.input_features) | set(
                     regression_config.output_features
                 )
@@ -126,10 +149,31 @@ def main(cfg: TrainConfig):
                 if i % cfg.log_freq == 0 or i == cfg.train_steps - 1:
                     print(f"{i}: Loss: {loss}")
 
-                policy_gd, policy_state = nnx.split(policy)
-                opt_gd, opt_state = nnx.split(optimizer)
+                wandb.log({"train/loss": loss}, step=i)
+
+                if evaluator and (i % cfg.eval_freq == 0 and i > 0):
+                    policy.eval()
+                    total_returns, _ = evaluator.evaluate(
+                        policy=policy,
+                        preprocessor=lambda x: preprocessor(preprocess_observation(x)),
+                        postprocessor=postprocessor,
+                    )
+                    avg_return = jnp.mean(total_returns)
+                    policy.train()
+
+                    wandb.log(
+                        {
+                            "eval/return": avg_return,
+                        },
+                        step=i,
+                    )
 
                 i += 1
+
+                pbar.update(1)
+
+                policy_gd, policy_state = nnx.split(policy)
+                opt_gd, opt_state = nnx.split(optimizer)
 
                 mngr.save(
                     i,
@@ -145,14 +189,6 @@ def main(cfg: TrainConfig):
 
             if i >= cfg.train_steps:
                 break
-
-    # plot losses
-    plt.plot(losses)
-    plt.xlabel("Step")
-    plt.ylabel("Loss")
-    plt.title("Training Loss")
-    plt.savefig("training_loss.png")
-    plt.close()
 
 
 if __name__ == "__main__":

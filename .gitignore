@@ -11,6 +11,8 @@ wheels/
 
 checkpoints
 
+wandb
+
 *.gif
 *.mp4
 *.png

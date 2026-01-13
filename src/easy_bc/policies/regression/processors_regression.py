@@ -27,7 +27,7 @@ def make_processors_regression_pre_post_processors(
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """
-    Constructs pre-processor and post-processor pipelines for a diffusion policy.
+    Constructs pre-processor and post-processor pipelines for a regression policy.
 
     The pre-processing pipeline prepares the input data for the model by:
     1. Renaming features.
@@ -40,7 +40,7 @@ def make_processors_regression_pre_post_processors(
     2. Unnormalizing the output features to their original scale.
 
     Args:
-        config: The configuration object for the diffusion policy,
+        config: The configuration object for the regression policy,
             containing feature definitions, normalization mappings, and device information.
         dataset_stats: A dictionary of statistics used for normalization.
             Defaults to None.

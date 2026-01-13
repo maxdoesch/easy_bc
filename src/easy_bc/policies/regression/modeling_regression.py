@@ -1,6 +1,13 @@
+from typing import Dict
+from typing_extensions import override
+
 import einops
+import optax
+import chex
+import jax.numpy as jnp
 from flax import nnx
 
+from easy_bc.policies.policy import BasePolicy
 from easy_bc.policies.regression.configuration_regression import RegressionConfig
 
 
@@ -117,7 +124,7 @@ class RGBEncoder(nnx.Module):
         return x
 
 
-class RegressionPolicy(nnx.Module):
+class RegressionPolicy(BasePolicy):
     """A simple regression policy network."""
 
     def __init__(self, config: RegressionConfig, rngs: nnx.Rngs):
@@ -130,6 +137,18 @@ class RegressionPolicy(nnx.Module):
         self.config.out_feature_dim = action_dim
 
         self.encoder = RGBEncoder(config, rngs)
+
+    @override
+    def compute_loss(self, batch: Dict[str, jnp.ndarray]) -> chex.Array:
+        img_key = next(iter(self.config.image_features.keys()))
+        x = batch[img_key]
+
+        pred_actions = self.encoder(x)
+        actions = batch["action"]
+
+        loss = optax.l2_loss(predictions=pred_actions, targets=actions)
+
+        return loss
 
     def __call__(self, x):
         img_key = next(iter(self.config.image_features.keys()))
