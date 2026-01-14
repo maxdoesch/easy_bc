@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Dict, Optional
 from dataclasses import dataclass, field
 
-
 import jax
 import flax.nnx as nnx
 import jax.numpy as jnp
