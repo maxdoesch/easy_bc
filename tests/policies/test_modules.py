@@ -5,7 +5,13 @@ import jax.numpy as jnp
 import flax.nnx as nnx
 
 
-from easy_bc.policies.models import EncoderStem, EncoderBlock, RGBEncoder
+from easy_bc.policies.modules import (
+    EncoderStem,
+    EncoderBlock,
+    RGBEncoder,
+    Conv1DBlock,
+    ConditionalResidual1DBlock,
+)
 
 
 @pytest.fixture
@@ -22,6 +28,111 @@ def _jit_parity(module, x, *, rtol=1e-4, atol=1e-5):
     assert y_eager.shape == y_jit.shape
     assert jnp.allclose(y_eager, y_jit, rtol=rtol, atol=atol)
     return y_eager, y_jit
+
+
+@pytest.mark.parametrize(
+    "B,H,input_dim,output_dim,kernel_size",
+    [
+        (2, 32, 8, 16, 3),
+        (1, 17, 16, 16, 1),
+        (4, 64, 32, 64, 5),
+    ],
+)
+def test_conv1d_block_forward_shape_and_values(
+    B, H, input_dim, output_dim, kernel_size, rngs
+):
+    block = Conv1DBlock(
+        input_dim=input_dim,
+        output_dim=output_dim,
+        kernel_size=kernel_size,
+        rngs=rngs,
+    )
+
+    x = jax.random.normal(jax.random.PRNGKey(0), (B, H, input_dim), dtype=jnp.float32)
+    y = block(x)
+
+    assert y.shape == (B, H, output_dim)
+    assert y.dtype == x.dtype
+    assert jnp.isfinite(y).all()
+
+
+def test_conv1d_block_jittable(rngs):
+    block = Conv1DBlock(
+        input_dim=8,
+        output_dim=16,
+        kernel_size=3,
+        rngs=rngs,
+    )
+
+    x = jax.random.normal(jax.random.PRNGKey(1), (2, 32, 8), dtype=jnp.float32)
+
+    y_eager, y_jit = _jit_parity(block, x, rtol=1e-4, atol=1e-5)
+    assert y_eager.shape == y_jit.shape
+
+
+@pytest.mark.parametrize(
+    "B,H,input_dim,output_dim,cond_dim",
+    [
+        (2, 32, 8, 16, 12),
+        (1, 17, 16, 16, 8),  # identity residual
+        (4, 64, 32, 64, 32),
+    ],
+)
+def test_conditional_residual_1d_block_forward(
+    B, H, input_dim, output_dim, cond_dim, rngs
+):
+    block = ConditionalResidual1DBlock(
+        input_dim=input_dim,
+        output_dim=output_dim,
+        cond_dim=cond_dim,
+        rngs=rngs,
+    )
+
+    x = jax.random.normal(jax.random.PRNGKey(0), (B, H, input_dim), dtype=jnp.float32)
+    cond = jax.random.normal(jax.random.PRNGKey(1), (B, cond_dim), dtype=jnp.float32)
+
+    y = block(x, cond)
+
+    assert y.shape == (B, H, output_dim)
+    assert y.dtype == x.dtype
+    assert jnp.isfinite(y).all()
+
+
+def test_conditional_residual_1d_block_jittable(rngs):
+    block = ConditionalResidual1DBlock(
+        input_dim=8,
+        output_dim=16,
+        cond_dim=10,
+        rngs=rngs,
+    )
+
+    x = jax.random.normal(jax.random.PRNGKey(0), (2, 32, 8), dtype=jnp.float32)
+    cond = jax.random.normal(jax.random.PRNGKey(1), (2, 10), dtype=jnp.float32)
+
+    gdef, state = nnx.split(block)
+    eager = nnx.merge(gdef, state)
+    compiled = nnx.merge(gdef, state)
+
+    y_eager = eager(x, cond)
+    y_jit = jax.jit(compiled)(x, cond)
+
+    assert y_eager.shape == y_jit.shape
+    assert jnp.allclose(y_eager, y_jit, rtol=1e-4, atol=1e-5)
+
+
+def test_conditional_residual_1d_block_wrong_cond_shape_raises(rngs):
+    block = ConditionalResidual1DBlock(
+        input_dim=8,
+        output_dim=16,
+        cond_dim=10,
+        rngs=rngs,
+    )
+
+    x = jnp.zeros((2, 32, 8), dtype=jnp.float32)
+    bad_cond = jnp.zeros((2, 11), dtype=jnp.float32)
+
+    with pytest.raises(Exception):
+        block(x, bad_cond)
 
 
 @pytest.mark.parametrize(

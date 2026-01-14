@@ -6,7 +6,7 @@ import chex
 import jax.numpy as jnp
 from flax import nnx
 
-from easy_bc.policies.models import RGBEncoder
+from easy_bc.policies.modules import RGBEncoder
 from easy_bc.policies.policy import BasePolicy
 from easy_bc.policies.regression.configuration_regression import RegressionConfig
 
