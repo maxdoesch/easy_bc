@@ -146,8 +146,6 @@ def main(cfg: TrainConfig):
                 losses.append(loss)
 
                 if i % cfg.log_freq == 0 or i == cfg.train_steps - 1:
-                    print(f"{i}: Loss: {loss}")
-
                     wandb.log({"train/loss": loss}, step=i)
 
                 if evaluator and (i % cfg.eval_freq == 0 and i > 0):
@@ -168,7 +166,7 @@ def main(cfg: TrainConfig):
                     )
 
                 i += 1
-
+                pbar.set_postfix(loss=f"{float(loss):.4f}")
                 pbar.update(1)
 
                 policy_gd, policy_state = nnx.split(policy)
