@@ -104,6 +104,138 @@ class ConditionalResidual1DBlock(nnx.Module):
         return out + x
 
 
+class ConditionalUnet1D(nnx.Module):
+    """
+    Conditional 1D U-Net
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        cond_dim: int,
+        down_dims: tuple[int, ...],
+        kernel_size: int,
+        num_groups: int,
+        rngs: nnx.Rngs,
+    ):
+        super().__init__()
+
+        down_dims = (input_dim, *down_dims)
+        cond_dim = cond_dim + 1  # for timestep embedding
+
+        self.down_blocks = nnx.List()
+        i = 1
+        for prev_dim, dim in zip(down_dims[:-1], down_dims[1:]):
+            block = ConditionalResidual1DBlock(
+                input_dim=prev_dim,
+                output_dim=dim,
+                cond_dim=cond_dim,
+                kernel_size=kernel_size,
+                num_groups=num_groups,
+                rngs=rngs,
+            )
+            if i == len(down_dims) - 1:
+                # No downsampling in the last block
+                downsample = nnx.identity
+            else:
+                downsample = nnx.Conv(
+                    in_features=dim,
+                    out_features=dim,
+                    kernel_size=(3,),
+                    strides=(2,),
+                    rngs=rngs,
+                )
+            self.down_blocks.append(nnx.List([block, downsample]))
+
+            i += 1
+
+        self.mid_block = ConditionalResidual1DBlock(
+            input_dim=down_dims[-1],
+            output_dim=down_dims[-1],
+            cond_dim=cond_dim,
+            kernel_size=kernel_size,
+            num_groups=num_groups,
+            rngs=rngs,
+        )
+
+        self.up_blocks = nnx.List()
+        i = 1
+        for prev_dim, dim in zip(reversed(down_dims[1:]), reversed(down_dims[:-1])):
+            block = nnx.Sequential(
+                ConditionalResidual1DBlock(
+                    input_dim=prev_dim * 2,
+                    output_dim=dim,
+                    cond_dim=cond_dim,
+                    kernel_size=kernel_size,
+                    num_groups=num_groups,
+                    rngs=rngs,
+                ),
+                nnx.identity
+                if i == len(down_dims) - 1
+                else nnx.ConvTranspose(
+                    in_features=dim,
+                    out_features=dim,
+                    kernel_size=(3,),
+                    strides=(2,),
+                    rngs=rngs,
+                ),
+            )
+            self.up_blocks.append(block)
+
+            i += 1
+
+        self.output_layer = nnx.Sequential(
+            Conv1DBlock(
+                input_dim=down_dims[0],
+                output_dim=down_dims[0],
+                kernel_size=kernel_size,
+                num_groups=num_groups,
+                rngs=rngs,
+            ),
+            nnx.Conv(
+                in_features=down_dims[0],
+                out_features=output_dim,
+                kernel_size=(1,),
+                rngs=rngs,
+            ),
+        )
+
+        self.output_layer = nnx.Conv(
+            in_features=down_dims[0],
+            out_features=output_dim,
+            kernel_size=(1,),
+            rngs=rngs,
+        )
+
+    def __call__(self, x, cond, timestep):
+        """
+        x: [B, H, input_dim]
+        cond: [B, cond_dim]
+        timestep: [B,]
+        """
+
+        # TODO: Use a proper timestep embedding instead of just concatenating the raw timestep
+        cond = jnp.concatenate([cond, timestep[:, None].astype(cond.dtype)], axis=-1)
+
+        skip_connections = []
+        for block, downsample in self.down_blocks:
+            x = block(x, cond)
+            skip_connections.append(x)
+            x = downsample(x)
+
+        x = self.mid_block(x, cond)
+
+        for block in self.up_blocks:
+            skip_x = skip_connections.pop()
+            x = jnp.concatenate([x, skip_x], axis=-1)
+            x = block(x, cond)
+
+        output = self.output_layer(x)
+
+        return output
+
+
 class EncoderStem(nnx.Module):
     def __init__(
         self, input_dim: int, output_dim: int, rngs: nnx.Rngs, num_groups: int = 8
@@ -216,6 +348,8 @@ class RGBEncoder(nnx.Module):
         x = self.encoder_stem(x)
         for block in self.encoder_blocks:
             x = block(x)
+
+        # TODO: Replace the global average pooling with a spatial softmax pooling to maintain spatial information
         x = nnx.avg_pool(x, window_shape=x.shape[1:3])  # Global average pool
         x = einops.rearrange(x, "B 1 1 C -> B C")
         x = self.head(x)

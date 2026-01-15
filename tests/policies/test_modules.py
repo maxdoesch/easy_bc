@@ -11,6 +11,7 @@ from easy_bc.policies.modules import (
     RGBEncoder,
     Conv1DBlock,
     ConditionalResidual1DBlock,
+    ConditionalUnet1D,
 )
 
 
@@ -19,15 +20,76 @@ def rngs():
     return nnx.Rngs(0)
 
 
-def _jit_parity(module, x, *, rtol=1e-4, atol=1e-5):
+def _jit_parity(
+    module: nnx.Module, args: tuple, *, rtol: float = 1e-4, atol: float = 1e-5
+):
+    """
+    module: nnx.Module
+    args: tuple of inputs to the module
+    """
     gdef, state = nnx.split(module)
     eager = nnx.merge(gdef, state)
     compiled = nnx.merge(gdef, state)
-    y_eager = eager(x)
-    y_jit = jax.jit(compiled)(x)
+
+    y_eager = eager(*args)
+    y_jit = jax.jit(compiled)(*args)
+
     assert y_eager.shape == y_jit.shape
     assert jnp.allclose(y_eager, y_jit, rtol=rtol, atol=atol)
     return y_eager, y_jit
+
+
+@pytest.mark.parametrize(
+    "B,H,input_dim,output_dim,cond_dim,down_dims,kernel_size,num_groups",
+    [
+        (2, 32, 8, 16, 7, (32, 64), 3, 8),
+        (1, 17, 16, 16, 5, (32,), 1, 4),
+        (4, 64, 32, 64, 9, (64, 128), 5, 8),
+    ],
+)
+def test_conditional_unet1d_forward(
+    B, H, input_dim, output_dim, cond_dim, down_dims, kernel_size, num_groups, rngs
+):
+    model = ConditionalUnet1D(
+        input_dim=input_dim,
+        output_dim=output_dim,
+        cond_dim=cond_dim,
+        down_dims=down_dims,
+        kernel_size=kernel_size,
+        num_groups=num_groups,
+        rngs=rngs,
+    )
+
+    x = jax.random.normal(jax.random.PRNGKey(0), (B, H, input_dim), dtype=jnp.float32)
+    cond = jax.random.normal(jax.random.PRNGKey(1), (B, cond_dim), dtype=jnp.float32)
+    timestep = jax.random.uniform(jax.random.PRNGKey(2), (B,), dtype=jnp.float32)
+
+    y = model(x, cond, timestep)
+
+    assert y.shape == (B, H, output_dim)
+    assert y.dtype == x.dtype
+    assert jnp.isfinite(y).all()
+
+
+def test_conditional_unet1d_jittable(rngs):
+    input_dim, output_dim, cond_dim = 8, 16, 7
+    model = ConditionalUnet1D(
+        input_dim=input_dim,
+        output_dim=output_dim,
+        cond_dim=cond_dim,
+        down_dims=(32, 64),
+        kernel_size=3,
+        num_groups=8,
+        rngs=rngs,
+    )
+
+    B, H = 2, 32
+    x = jax.random.normal(jax.random.PRNGKey(10), (B, H, input_dim), dtype=jnp.float32)
+    cond = jax.random.normal(jax.random.PRNGKey(11), (B, cond_dim), dtype=jnp.float32)
+    timestep = jax.random.uniform(jax.random.PRNGKey(2), (B,), dtype=jnp.float32)
+
+    y_eager, y_jit = _jit_parity(model, (x, cond, timestep), rtol=1e-4, atol=1e-5)
+    assert y_eager.shape == y_jit.shape
 
 
 @pytest.mark.parametrize(
@@ -38,9 +100,7 @@ def _jit_parity(module, x, *, rtol=1e-4, atol=1e-5):
         (4, 64, 32, 64, 5),
     ],
 )
-def test_conv1d_block_forward_shape_and_values(
-    B, H, input_dim, output_dim, kernel_size, rngs
-):
+def test_conv1d_block_forward(B, H, input_dim, output_dim, kernel_size, rngs):
     block = Conv1DBlock(
         input_dim=input_dim,
         output_dim=output_dim,
@@ -66,7 +126,7 @@ def test_conv1d_block_jittable(rngs):
 
     x = jax.random.normal(jax.random.PRNGKey(1), (2, 32, 8), dtype=jnp.float32)
 
-    y_eager, y_jit = _jit_parity(block, x, rtol=1e-4, atol=1e-5)
+    y_eager, y_jit = _jit_parity(block, (x,), rtol=1e-4, atol=1e-5)
     assert y_eager.shape == y_jit.shape
 
 
@@ -109,15 +169,8 @@ def test_conditional_residual_1d_block_jittable(rngs):
     x = jax.random.normal(jax.random.PRNGKey(0), (2, 32, 8), dtype=jnp.float32)
     cond = jax.random.normal(jax.random.PRNGKey(1), (2, 10), dtype=jnp.float32)
 
-    gdef, state = nnx.split(block)
-    eager = nnx.merge(gdef, state)
-    compiled = nnx.merge(gdef, state)
-
-    y_eager = eager(x, cond)
-    y_jit = jax.jit(compiled)(x, cond)
-
+    y_eager, y_jit = _jit_parity(block, (x, cond), rtol=1e-4, atol=1e-5)
     assert y_eager.shape == y_jit.shape
-    assert jnp.allclose(y_eager, y_jit, rtol=1e-4, atol=1e-5)
 
 
 def test_conditional_residual_1d_block_wrong_cond_shape_raises(rngs):
@@ -143,7 +196,7 @@ def test_conditional_residual_1d_block_wrong_cond_shape_raises(rngs):
         (8, 64, 128, 96, 4),
     ],
 )
-def test_encoder_stem_forward_pass(input_dim, output_dim, H, W, B, rngs):
+def test_encoder_stem_forward(input_dim, output_dim, H, W, B, rngs):
     stem = EncoderStem(input_dim=input_dim, output_dim=output_dim, rngs=rngs)
     x = jax.random.normal(
         jax.random.PRNGKey(1), (B, H, W, input_dim), dtype=jnp.float32
@@ -173,9 +226,7 @@ def test_encoder_stem_wrong_input_channels(rngs):
         (8, 24, 2, 63, 65, 1),
     ],
 )
-def test_encoder_block_forward_shape_and_values(
-    input_dim, output_dim, stride, H, W, B, rngs
-):
+def test_encoder_block_forward(input_dim, output_dim, stride, H, W, B, rngs):
     block = EncoderBlock(
         input_dim=input_dim, output_dim=output_dim, stride=stride, rngs=rngs
     )
@@ -202,7 +253,7 @@ def test_encoder_block_rejects_mismatched_channels(rngs):
 @pytest.mark.parametrize(
     "B,H,W,C,out_dim", [(2, 64, 64, 3, 10), (1, 63, 65, 3, 16), (4, 128, 96, 3, 8)]
 )
-def test_rgb_encoder_forward_pass(B, H, W, C, out_dim, rngs):
+def test_rgb_encoder_forward(B, H, W, C, out_dim, rngs):
     img_shape = (C, H, W)
     enc = RGBEncoder(img_shape, out_dim, rngs=rngs)
 
@@ -221,7 +272,7 @@ def test_rgb_encoder_jittable(rngs):
 
     x = jax.random.normal(jax.random.PRNGKey(1), (2, *image_shape), dtype=jnp.float32)
 
-    y_eager, y_jit = _jit_parity(enc, x, rtol=1e-4, atol=1e-5)
+    y_eager, y_jit = _jit_parity(enc, (x,), rtol=1e-4, atol=1e-5)
     assert y_eager.shape == y_jit.shape == (2, 16)
 
 
