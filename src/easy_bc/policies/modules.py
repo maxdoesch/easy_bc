@@ -111,8 +111,7 @@ class ConditionalUnet1D(nnx.Module):
 
     def __init__(
         self,
-        input_dim: int,
-        output_dim: int,
+        feature_dim: int,
         cond_dim: int,
         down_dims: tuple[int, ...],
         kernel_size: int,
@@ -121,7 +120,7 @@ class ConditionalUnet1D(nnx.Module):
     ):
         super().__init__()
 
-        down_dims = (input_dim, *down_dims)
+        down_dims = (feature_dim, *down_dims)
         cond_dim = cond_dim + 1  # for timestep embedding
 
         self.down_blocks = nnx.List()
@@ -185,29 +184,6 @@ class ConditionalUnet1D(nnx.Module):
 
             i += 1
 
-        self.output_layer = nnx.Sequential(
-            Conv1DBlock(
-                input_dim=down_dims[0],
-                output_dim=down_dims[0],
-                kernel_size=kernel_size,
-                num_groups=num_groups,
-                rngs=rngs,
-            ),
-            nnx.Conv(
-                in_features=down_dims[0],
-                out_features=output_dim,
-                kernel_size=(1,),
-                rngs=rngs,
-            ),
-        )
-
-        self.output_layer = nnx.Conv(
-            in_features=down_dims[0],
-            out_features=output_dim,
-            kernel_size=(1,),
-            rngs=rngs,
-        )
-
     def __call__(self, x, cond, timestep):
         """
         x: [B, H, input_dim]
@@ -231,9 +207,7 @@ class ConditionalUnet1D(nnx.Module):
             x = jnp.concatenate([x, skip_x], axis=-1)
             x = block(x, cond)
 
-        output = self.output_layer(x)
-
-        return output
+        return x
 
 
 class EncoderStem(nnx.Module):

@@ -1,5 +1,4 @@
 import pytest
-
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -25,12 +24,20 @@ def _as_batched_jnp(x):
     return jnp.expand_dims(jnp.asarray(x), axis=0)
 
 
-def _jit_parity(module, x, *, rtol=1e-4, atol=1e-5):
-    gdef, state = nnx.split(module)
+def _jit_parity_method(obj, method_name: str, batch, *, rtol=1e-4, atol=1e-5):
+    """
+    Check eager vs jitted parity for a specific method on an NNX module/policy.
+    """
+    gdef, state = nnx.split(obj)
     eager = nnx.merge(gdef, state)
     compiled = nnx.merge(gdef, state)
-    y_eager = eager(x)
-    y_jit = jax.jit(compiled)(x)
+
+    eager_fn = getattr(eager, method_name)
+    compiled_fn = getattr(compiled, method_name)
+
+    y_eager = eager_fn(batch)
+    y_jit = jax.jit(compiled_fn)(batch)
+
     assert y_eager.shape == y_jit.shape
     assert jnp.allclose(y_eager, y_jit, rtol=rtol, atol=atol)
     return y_eager, y_jit
@@ -75,13 +82,25 @@ def batch(regression_config: RegressionConfig, dataset) -> dict:
     return jax.tree_util.tree_map(_as_batched_jnp, sample)
 
 
-def test_regression_policy_forward_pass(policy: RegressionPolicy, batch: dict):
-    action = policy(batch)
+def test_regression_policy_sample_action(policy: RegressionPolicy, batch: dict):
+    action = policy.sample_action(batch)
     assert action.shape == (1, _action_dim(policy.config))
 
 
-def test_regression_policy_jittable(policy: RegressionPolicy, batch: dict):
-    _jit_parity(policy, batch, rtol=1e-4, atol=1e-5)
+def test_regression_policy_compute_loss(policy: RegressionPolicy, batch: dict):
+    loss = policy.compute_loss(batch)
+    assert loss.shape == (1, _action_dim(policy.config))
+    assert jnp.isfinite(loss).all()
+
+
+def test_regression_policy_sample_action_jittable(
+    policy: RegressionPolicy, batch: dict
+):
+    _jit_parity_method(policy, "sample_action", batch, rtol=1e-4, atol=1e-5)
+
+
+def test_regression_policy_compute_loss_jittable(policy: RegressionPolicy, batch: dict):
+    _jit_parity_method(policy, "compute_loss", batch, rtol=1e-4, atol=1e-5)
 
 
 def test_regression_policy_checkpointing(policy: RegressionPolicy, batch: dict):
@@ -101,7 +120,7 @@ def test_regression_policy_checkpointing(policy: RegressionPolicy, batch: dict):
 
         restored_policy = nnx.merge(graphdef, restored_state)
 
-    action_orig = policy(batch)
-    action_restored = restored_policy(batch)
+    action_orig = policy.sample_action(batch)
+    action_restored = restored_policy.sample_action(batch)
 
     assert jnp.allclose(action_orig, action_restored)

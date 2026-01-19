@@ -31,16 +31,21 @@ class RegressionPolicy(BasePolicy):
         img_key = next(iter(self.config.image_features.keys()))
         x = batch[img_key]
 
-        pred_actions = self.encoder(x)
+        pred_actions = self(x)
         actions = batch["action"]
 
         loss = optax.l2_loss(predictions=pred_actions, targets=actions)
 
         return loss
 
-    def __call__(self, x):
+    @override
+    def sample_action(self, batch: Dict[str, jnp.ndarray]) -> jnp.ndarray:
         img_key = next(iter(self.config.image_features.keys()))
-        x = x[img_key]
+        x = batch[img_key]
 
+        pred_actions = self(x)
+        return pred_actions
+
+    def __call__(self, x):
         x = self.encoder(x)
         return x
