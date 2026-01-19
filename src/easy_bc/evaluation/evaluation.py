@@ -7,7 +7,8 @@ from gymnasium.vector.vector_env import VectorEnv
 
 import jax
 import jax.numpy as jnp
-from flax import nnx
+
+from easy_bc.policies.policy import BasePolicy
 
 
 @dataclass
@@ -21,7 +22,7 @@ class Evaluator:
         self.envs = envs
 
     def evaluate(
-        self, policy: nnx.Module, preprocessor: Callable, postprocessor: Callable
+        self, policy: BasePolicy, preprocessor: Callable, postprocessor: Callable
     ) -> tuple[float, list[np.ndarray]]:
         total_returns = []
         episodes_finished = 0
@@ -29,7 +30,7 @@ class Evaluator:
         done = np.zeros(self.envs.num_envs, dtype=bool)
         episode_return = np.zeros(self.envs.num_envs, dtype=np.float32)
 
-        jit_policy = jax.jit(policy)
+        jit_sample_action = jax.jit(policy.sample_action)
 
         pbar = tqdm.tqdm(total=self.cfg.n_episodes, desc="Evaluating", unit="ep")
 
@@ -39,7 +40,7 @@ class Evaluator:
             observation = preprocessor(obs)
             observation = jax.tree_util.tree_map(jnp.asarray, observation)
 
-            action = jit_policy(observation)
+            action = jit_sample_action(observation)
             action = torch.tensor(np.array(action), device="cpu")
             action = postprocessor(action)
 
