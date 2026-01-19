@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 from typing_extensions import override
 
 import optax
@@ -27,7 +27,9 @@ class RegressionPolicy(BasePolicy):
         self.encoder = RGBEncoder(images_shape, out_feature_dim, rngs)
 
     @override
-    def compute_loss(self, batch: Dict[str, jnp.ndarray]) -> chex.Array:
+    def compute_loss(
+        self, batch: Dict[str, jnp.ndarray], rng: Optional[chex.PRNGKey] = None
+    ) -> chex.Array:
         img_key = next(iter(self.config.image_features.keys()))
         x = batch[img_key]
 
