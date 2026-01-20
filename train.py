@@ -16,23 +16,26 @@ import orbax.checkpoint as ocp
 from torch.utils.data import DataLoader
 
 from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotDataset
-from lerobot.datasets.utils import dataset_to_policy_features, write_stats
-from lerobot.configs.types import FeatureType
+from lerobot.datasets.utils import write_stats
 from lerobot.envs.factory import make_env, make_env_config
 from lerobot.envs.utils import preprocess_observation
 
-from easy_bc.policies.regression.configuration_regression import RegressionConfig
 from easy_bc.policies.regression.modeling_regression import RegressionPolicy
-from easy_bc.policies.regression.processors_regression import (
-    make_processors_regression_pre_post_processors,
-)
 from easy_bc.evaluation.evaluation import Evaluator, EvaluatorConfig
+
+from easy_bc.policies.factory import (
+    make_policy_config,
+    make_policy,
+    make_pre_post_processors,
+)
 
 
 @dataclass()
 class TrainConfig:
     project_name: str = "easy_bc"
     exp_name: str = tyro.MISSING
+
+    policy: str = tyro.MISSING
 
     repo_id: str = tyro.MISSING
     train_steps: int = 10_000
@@ -72,24 +75,16 @@ def main(cfg: TrainConfig):
     )
 
     dataset_metadata = LeRobotDatasetMetadata(cfg.repo_id)
-    features = dataset_to_policy_features(dataset_metadata.features)
 
-    output_features = {
-        key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION
-    }
-    input_features = {
-        key: ft for key, ft in features.items() if key not in output_features
-    }
+    policy_config = make_policy_config(
+        cfg.policy, dataset_metadata=dataset_metadata, device="cuda"
+    )
+    policy = make_policy(policy_config, rngs=nnx.Rngs(0))
 
-    regression_config = RegressionConfig(
-        input_features=input_features, output_features=output_features, device="cuda"
+    preprocessor, postprocessor = make_pre_post_processors(
+        policy_config, dataset_metadata
     )
 
-    policy = RegressionPolicy(config=regression_config, rngs=nnx.Rngs(0))
-    preprocessor, postprocessor = make_processors_regression_pre_post_processors(
-        regression_config,
-        dataset_stats=dataset_metadata.stats,  # pyright: ignore
-    )
     dataset = LeRobotDataset(
         repo_id=cfg.repo_id,
     )
@@ -135,8 +130,8 @@ def main(cfg: TrainConfig):
         while True:
             for batch in dataloader:
                 batch = preprocessor(batch)
-                keep_keys = set(regression_config.input_features) | set(
-                    regression_config.output_features
+                keep_keys = set(policy_config.input_features) | set(
+                    policy_config.output_features
                 )
                 filtered = {k: v for k, v in batch.items() if k in keep_keys}
 
