@@ -2,6 +2,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 from flax import nnx
+import orbax.checkpoint as ocp
 
 from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotDataset
 from lerobot.datasets.utils import dataset_to_policy_features
@@ -107,3 +108,48 @@ def test_flow_unet_policy_compute_loss(policy: FlowUnetPolicy, batch: dict):
 
 def test_flow_unet_policy_compute_loss_jittable(policy: FlowUnetPolicy, batch: dict):
     _jit_parity_method(policy, "compute_loss", batch, rtol=1e-4, atol=1e-5)
+
+
+def test_flow_unet_policy_sample_action(policy: FlowUnetPolicy, batch: dict):
+    img_key = next(iter(policy.config.image_features.keys()))
+    img = batch[img_key]
+    B, H, action_dim = (
+        img.shape[0],
+        policy.config.horizon,
+        policy.config.action_feature.shape[0],  # pyright: ignore
+    )
+
+    rng = jax.random.PRNGKey(0)
+    actions = policy.sample_action(batch, rng)
+
+    assert actions.shape == (B, H, action_dim)
+    assert jnp.isfinite(actions).all()
+
+
+def test_flow_unet_policy_sample_action_jittable(policy: FlowUnetPolicy, batch: dict):
+    _jit_parity_method(policy, "sample_action", batch, rtol=1e-4, atol=1e-5)
+
+
+def test_flow_unet_policy_checkpointing(policy: FlowUnetPolicy, batch: dict):
+    options = ocp.CheckpointManagerOptions()
+    with ocp.CheckpointManager(
+        ocp.test_utils.erase_and_create_empty("/tmp/ckpt1/"),
+        options=options,
+    ) as mngr:
+        graphdef, policy_state = nnx.split(policy)
+
+        mngr.save(0, args=ocp.args.StandardSave(policy_state))  # pyright: ignore
+
+        restored_state = mngr.restore(
+            0,
+            args=ocp.args.StandardRestore(policy_state),  # pyright: ignore
+        )
+
+        restored_policy = nnx.merge(graphdef, restored_state)
+
+    rng = jax.random.PRNGKey(0)
+
+    action_orig = policy.sample_action(batch, rng)
+    action_restored = restored_policy.sample_action(batch, rng)
+
+    assert jnp.allclose(action_orig, action_restored)

@@ -64,6 +64,8 @@ class FlowUnetConfig(PreTrainedConfig):
     scheduler_name: str = "cosine"
     scheduler_warmup_steps: int = 500
 
+    num_inference_steps: int = 10
+
     def __post_init__(self):
         super().__post_init__()
 

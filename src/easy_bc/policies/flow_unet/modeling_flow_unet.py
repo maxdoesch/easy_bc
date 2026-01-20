@@ -77,7 +77,7 @@ class FlowUnetPolicy(BasePolicy):
     def compute_loss(
         self, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
     ) -> chex.Array:
-        noise_rng, time_rng, _ = jax.random.split(rng, 3)
+        noise_rng, time_rng = jax.random.split(rng, 2)
         img_key = next(iter(self.config.image_features.keys()))
         img = batch[img_key]  # B, C, H, W
 
@@ -106,8 +106,47 @@ class FlowUnetPolicy(BasePolicy):
         return loss
 
     @override
-    def sample_action(self, batch: Dict[str, jnp.ndarray]) -> jnp.ndarray:
-        raise NotImplementedError
+    def sample_action(
+        self, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
+    ) -> jnp.ndarray:
+        img_key = next(iter(self.config.image_features.keys()))
+        img = batch[img_key]  # B, C, H, W
+
+        B, H, action_dim = (
+            img.shape[0],
+            self.config.horizon,
+            self.config.action_feature.shape[0],  # pyright: ignore
+        )
+        dtype = img.dtype
+
+        dt = 1.0 / self.config.num_inference_steps
+
+        noise = jax.random.normal(
+            rng,
+            (B, H, action_dim),
+            dtype=dtype,
+        )
+
+        img_feature = self.rgb_encoder(img)  # B, img_feature_dim
+
+        def step(carry):
+            x_t, t = carry
+
+            latent_actions = self.action_in_projection(x_t)  # B, H, latent_dim
+            pred_latent_actions = self.unet(
+                latent_actions, img_feature, jnp.full((B,), t, dtype=dtype)
+            )  # B, H, latent_dim
+            v_t = self.action_out_projection(pred_latent_actions)  # B, H, action_dim
+
+            return x_t - dt * v_t, t - dt
+
+        def cond(carry):
+            _, t = carry
+            return t >= dt / 2.0
+
+        x_0, _ = nnx.while_loop(cond, step, (noise, 1.0))
+
+        return x_0
 
     def __call__(self, x_t, img, timestep):
         img_feature = self.rgb_encoder(img)  # B, img_feature_dim
