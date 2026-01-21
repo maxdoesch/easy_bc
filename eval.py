@@ -5,21 +5,21 @@ from pathlib import Path
 import numpy as np
 from dataclasses import dataclass
 
+import jax
 from flax import nnx
 import orbax.checkpoint as ocp
 
-from easy_bc.policies.regression.modeling_regression import RegressionPolicy
-from easy_bc.policies.regression.configuration_regression import RegressionConfig
-from easy_bc.policies.regression.processors_regression import (
-    make_processors_regression_pre_post_processors,
+from easy_bc.policies.factory import (
+    make_policy,
+    make_policy_config,
+    make_pre_post_processors,
 )
 from easy_bc.evaluation.evaluation import EvaluatorConfig, Evaluator
 
 
 from lerobot.envs.factory import make_env
 from lerobot.datasets.utils import load_stats
-from lerobot.configs.types import FeatureType
-from lerobot.envs.utils import env_to_policy_features, preprocess_observation
+from lerobot.envs.utils import preprocess_observation
 from lerobot.envs.factory import PushtEnv
 
 
@@ -30,8 +30,16 @@ class EvalCfg:
     evaluator: EvaluatorConfig
     n_envs: int = 1
 
+    policy: str = tyro.MISSING
+
+    seed: int = 43
+
 
 def main(cfg: EvalCfg):
+    init_rng = jax.random.PRNGKey(cfg.seed)
+    policy_rngs = nnx.Rngs(jax.random.fold_in(init_rng, 0))
+    eval_rng = jax.random.fold_in(init_rng, 1)
+
     env_cfg = PushtEnv()
     envs_dict = make_env(env_cfg, n_envs=cfg.n_envs)
 
@@ -39,28 +47,21 @@ def main(cfg: EvalCfg):
     envs = envs_dict[suite_name][0]
 
     # dict_keys(['action', 'observation.state', 'observation.image'])
-    features = env_to_policy_features(env_cfg)
-
-    output_features = {
-        key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION
-    }
-    input_features = {
-        key: ft for key, ft in features.items() if key not in output_features
-    }
-
-    regression_config = RegressionConfig(
-        input_features=input_features, output_features=output_features, device="cuda"
-    )
+    policy_config = make_policy_config(cfg.policy, env_cfg=env_cfg)
+    policy = make_policy(policy_config, rngs=policy_rngs)
 
     checkpoint_dir = Path(os.path.abspath(cfg.checkpoint_path))
     dataset_stats = load_stats(checkpoint_dir)
 
-    preprocessor, postprocessor = make_processors_regression_pre_post_processors(
-        regression_config,
-        dataset_stats=dataset_stats,  # pyright: ignore
-    )
+    if dataset_stats:
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_config, dataset_stats
+        )
+    else:
+        raise ValueError(
+            "Dataset stats are required for preprocessing and postprocessing."
+        )
 
-    policy = RegressionPolicy(config=regression_config, rngs=nnx.Rngs(0))
     policy_gd, policy_state = nnx.split(policy)
 
     mngr = ocp.CheckpointManager(
@@ -84,6 +85,7 @@ def main(cfg: EvalCfg):
         policy=policy,
         preprocessor=lambda x: preprocessor(preprocess_observation(x)),
         postprocessor=postprocessor,
+        eval_rng=eval_rng,
     )
 
     imageio.mimsave(

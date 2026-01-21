@@ -14,5 +14,7 @@ class BasePolicy(nnx.Module, abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def sample_action(self, batch: Dict[str, jnp.ndarray]) -> jnp.ndarray:
+    def sample_action(
+        self, batch: Dict[str, jnp.ndarray], rng: Optional[chex.PRNGKey] = None
+    ) -> jnp.ndarray:
         raise NotImplementedError

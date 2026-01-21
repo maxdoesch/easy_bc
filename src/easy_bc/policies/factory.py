@@ -1,6 +1,11 @@
-from typing import Any, Type
+import numpy as np
+from typing import Any, Optional, Type
+
+from lerobot.envs import EnvConfig
+from lerobot.envs.utils import env_to_policy_features
 
 from easy_bc.policies.flow_unet.configuration_flow_unet import FlowUnetConfig
+from easy_bc.policies.policy import BasePolicy
 from easy_bc.policies.regression.configuration_regression import RegressionConfig
 from easy_bc.policies.flow_unet.modeling_flow_unet import FlowUnetPolicy
 from easy_bc.policies.regression.modeling_regression import RegressionPolicy
@@ -19,22 +24,17 @@ from lerobot.processor import PolicyAction, PolicyProcessorPipeline
 
 
 def make_policy_config(
-    name: str, dataset_metadata: LeRobotDatasetMetadata, **kwargs: Any
+    name: str,
+    dataset_metadata: Optional[LeRobotDatasetMetadata] = None,
+    env_cfg: Optional[EnvConfig] = None,
+    **kwargs: Any,
 ) -> PreTrainedConfig:
-    """Factory method to create policy configurations.
-
-    Args:
-        name: The name of the policy configuration to create.
-        **kwargs: Keyword arguments passed to the config constructor.
-
-    Returns:
-        An instance of the requested policy configuration.
-
-    Raises:
-        ValueError: If the specified policy configuration name is not recognized.
-    """
-
-    features = dataset_to_policy_features(dataset_metadata.features)
+    if dataset_metadata:
+        features = dataset_to_policy_features(dataset_metadata.features)
+    elif env_cfg:
+        features = env_to_policy_features(env_cfg)
+    else:
+        raise ValueError("Either dataset_metadata or env_cfg must be provided.")
 
     output_features = {
         key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION
@@ -56,20 +56,8 @@ def make_policy_config(
         raise ValueError(f"Unknown policy config name: {name}") from e
 
 
-def make_policy(config: PreTrainedConfig, **kwargs: Any) -> Any:
-    """Factory method to create policy instances.
-
-    Args:
-        config: The policy configuration instance.
-        **kwargs: Keyword arguments passed to the policy constructor.
-
-    Returns:
-        An instance of the requested policy.
-
-    Raises:
-        ValueError: If the specified policy configuration type is not recognized.
-    """
-
+def make_policy(config: PreTrainedConfig, **kwargs: Any) -> BasePolicy:
+    # TODO: load from pretrained path
     policy_classes: dict[Type[PreTrainedConfig], Type[Any]] = {
         RegressionConfig: RegressionPolicy,
         FlowUnetConfig: FlowUnetPolicy,
@@ -83,7 +71,7 @@ def make_policy(config: PreTrainedConfig, **kwargs: Any) -> Any:
 
 
 def make_pre_post_processors(
-    config: PreTrainedConfig, dataset_metadata: LeRobotDatasetMetadata
+    config: PreTrainedConfig, dataset_stats: dict[str, dict[str, np.ndarray]]
 ) -> tuple[
     PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
@@ -98,5 +86,5 @@ def make_pre_post_processors(
         raise ValueError(f"Unknown policy config type: {type(config)}")
     return factory(
         config,
-        dataset_stats=dataset_metadata.stats,  # pyright: ignore
+        dataset_stats=dataset_stats,
     )

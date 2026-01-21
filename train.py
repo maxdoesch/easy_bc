@@ -1,4 +1,6 @@
+import dataclasses
 import os
+import chex
 import tyro
 from tqdm import tqdm
 import wandb
@@ -19,8 +21,9 @@ from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotData
 from lerobot.datasets.utils import write_stats
 from lerobot.envs.factory import make_env, make_env_config
 from lerobot.envs.utils import preprocess_observation
+from lerobot.datasets.factory import resolve_delta_timestamps
 
-from easy_bc.policies.regression.modeling_regression import RegressionPolicy
+from easy_bc.policies.policy import BasePolicy
 from easy_bc.evaluation.evaluation import Evaluator, EvaluatorConfig
 
 from easy_bc.policies.factory import (
@@ -47,6 +50,8 @@ class TrainConfig:
 
     batch_size: int = 32
 
+    seed: int = 42
+
     env_id: Optional[str] = None
     num_envs: int = 1
     evaluator: EvaluatorConfig = field(default_factory=lambda: EvaluatorConfig())
@@ -54,15 +59,20 @@ class TrainConfig:
 
 @nnx.jit
 def train_step(
-    policy: RegressionPolicy, batch: Dict[str, jnp.ndarray], optimizer: nnx.Optimizer
+    policy: BasePolicy,
+    batch: Dict[str, jnp.ndarray],
+    optimizer: nnx.Optimizer,
+    rng: chex.PRNGKey,
 ) -> float:
-    def loss_fn(policy: RegressionPolicy, batch: Dict[str, jnp.ndarray]) -> jnp.ndarray:
-        chunked_loss = policy.compute_loss(batch)
+    def loss_fn(
+        policy: BasePolicy, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
+    ) -> jnp.ndarray:
+        chunked_loss = policy.compute_loss(batch, rng)
 
         return chunked_loss.mean()
 
     grad_fn = nnx.value_and_grad(loss_fn, has_aux=False)
-    loss, grads = grad_fn(policy, batch)
+    loss, grads = grad_fn(policy, batch, rng)
     optimizer.update(policy, grads)
 
     return loss
@@ -70,23 +80,31 @@ def train_step(
 
 def main(cfg: TrainConfig):
     wandb.init(
-        project=cfg.project_name,
-        name=cfg.exp_name,
+        project=cfg.project_name, name=cfg.exp_name, config=dataclasses.asdict(cfg)
     )
+
+    init_rng = jax.random.PRNGKey(cfg.seed)
+    policy_rngs = nnx.Rngs(jax.random.fold_in(init_rng, 0))
+    train_rng = jax.random.fold_in(init_rng, 1)
+    eval_rng = jax.random.fold_in(init_rng, 2)
 
     dataset_metadata = LeRobotDatasetMetadata(cfg.repo_id)
 
     policy_config = make_policy_config(
         cfg.policy, dataset_metadata=dataset_metadata, device="cuda"
     )
-    policy = make_policy(policy_config, rngs=nnx.Rngs(0))
+    policy = make_policy(policy_config, rngs=policy_rngs)
 
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_config, dataset_metadata
-    )
+    if dataset_metadata.stats:
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_config, dataset_metadata.stats
+        )
+    else:
+        raise ValueError("Dataset stats are required for training.")
 
     dataset = LeRobotDataset(
         repo_id=cfg.repo_id,
+        delta_timestamps=resolve_delta_timestamps(policy_config, dataset_metadata),
     )
 
     dataloader = DataLoader(
@@ -110,8 +128,10 @@ def main(cfg: TrainConfig):
 
     policy.train()
 
-    ckpt_dir = Path(os.path.abspath(cfg.checkpoint_dir)) / datetime.now().strftime(
-        "%Y%m%d_%H%M%S"
+    ckpt_dir = (
+        Path(os.path.abspath(cfg.checkpoint_dir))
+        / cfg.policy
+        / datetime.now().strftime("%Y%m%d_%H%M%S")
     )
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -137,7 +157,10 @@ def main(cfg: TrainConfig):
 
                 batch = jax.tree_util.tree_map(jnp.asarray, filtered)
 
-                loss = train_step(policy, batch, optimizer)
+                train_rng, step_rng = jax.random.split(train_rng)
+
+                # TODO: jax.block_until_ready to avoid profiling warning
+                loss = train_step(policy, batch, optimizer, step_rng)
                 losses.append(loss)
 
                 if i % cfg.log_freq == 0 or i == cfg.train_steps - 1:
@@ -149,6 +172,7 @@ def main(cfg: TrainConfig):
                         policy=policy,
                         preprocessor=lambda x: preprocessor(preprocess_observation(x)),
                         postprocessor=postprocessor,
+                        eval_rng=eval_rng,
                     )
                     avg_return = jnp.mean(total_returns)
                     policy.train()

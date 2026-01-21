@@ -33,15 +33,21 @@ class RegressionPolicy(BasePolicy):
         img_key = next(iter(self.config.image_features.keys()))
         x = batch[img_key]
 
-        pred_actions = self(x)
         actions = batch["action"]
+
+        pred_actions = self(x)
+
+        # TODO: propely handle horizon dimension
+        pred_actions = jnp.reshape(pred_actions, actions.shape)
 
         loss = optax.l2_loss(predictions=pred_actions, targets=actions)
 
         return loss
 
     @override
-    def sample_action(self, batch: Dict[str, jnp.ndarray]) -> jnp.ndarray:
+    def sample_action(
+        self, batch: Dict[str, jnp.ndarray], rng: Optional[chex.PRNGKey] = None
+    ) -> jnp.ndarray:
         img_key = next(iter(self.config.image_features.keys()))
         x = batch[img_key]
 

@@ -138,6 +138,7 @@ class ConditionalUnet1D(nnx.Module):
                 # No downsampling in the last block
                 downsample = nnx.identity
             else:
+                # TODO: downsampling may fail when H is not devisible by 2 enough times
                 downsample = nnx.Conv(
                     in_features=dim,
                     out_features=dim,

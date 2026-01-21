@@ -43,9 +43,7 @@ class FlowUnetConfig(PreTrainedConfig):
         }
     )
 
-    horizon: int = 10
-
-    crop_shape: tuple[int, ...] = (84, 84)
+    horizon: int = 16
 
     # RGBEncoder
     img_feature_dim: int = 512
@@ -110,12 +108,12 @@ class FlowUnetConfig(PreTrainedConfig):
         return None
 
     @property
-    def observation_delta_indices(self) -> list:
-        return list([0])
+    def observation_delta_indices(self) -> None:
+        return None
 
     @property
     def action_delta_indices(self) -> list:
-        return list([0])
+        return list(range(self.horizon))
 
     @property
     def reward_delta_indices(self) -> None:
