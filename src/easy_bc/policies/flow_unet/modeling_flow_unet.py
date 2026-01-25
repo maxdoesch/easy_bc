@@ -73,6 +73,17 @@ class FlowUnetPolicy(BasePolicy):
             ),
         )
 
+    def pred_action_flow(
+        self, x_t: jnp.ndarray, cond: jnp.ndarray, timestep: jnp.ndarray
+    ):
+        latent_actions = self.action_in_projection(x_t)  # B, H, latent_dim
+        pred_latent_actions = self.unet(
+            latent_actions, cond, timestep
+        )  # B, H, latent_dim
+        v_t = self.action_out_projection(pred_latent_actions)  # B, H, action_dim
+
+        return v_t
+
     @override
     def compute_loss(
         self, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
@@ -99,7 +110,9 @@ class FlowUnetPolicy(BasePolicy):
         x_t = time_expanded * noise + (1 - time_expanded) * actions  # B, H, action_dim
         u_t = noise - actions  # B, H, action_dim
 
-        v_t = self(x_t, img, time)  # B, H, action_dim
+        img_feature = self.rgb_encoder(img)  # B, img_feature_dim
+
+        v_t = self.pred_action_flow(x_t, img_feature, time)  # B, H, action_dim
 
         loss = optax.l2_loss(predictions=v_t, targets=u_t).mean(axis=-1)
 
@@ -132,11 +145,10 @@ class FlowUnetPolicy(BasePolicy):
         def step(carry):
             x_t, t = carry
 
-            latent_actions = self.action_in_projection(x_t)  # B, H, latent_dim
-            pred_latent_actions = self.unet(
-                latent_actions, img_feature, jnp.full((B,), t, dtype=dtype)
-            )  # B, H, latent_dim
-            v_t = self.action_out_projection(pred_latent_actions)  # B, H, action_dim
+            time_batched = jnp.full((B,), t, dtype=dtype)
+            v_t = self.pred_action_flow(
+                x_t, img_feature, time_batched
+            )  # B, H, action_dim
 
             return x_t - dt * v_t, t - dt
 
@@ -147,14 +159,3 @@ class FlowUnetPolicy(BasePolicy):
         x_0, _ = nnx.while_loop(cond, step, (noise, 1.0))
 
         return x_0
-
-    def __call__(self, x_t, img, timestep):
-        img_feature = self.rgb_encoder(img)  # B, img_feature_dim
-
-        latent_actions = self.action_in_projection(x_t)  # B, H, latent_dim
-        pred_latent_actions = self.unet(
-            latent_actions, img_feature, timestep
-        )  # B, H, latent_dim
-        v_t = self.action_out_projection(pred_latent_actions)  # B, H, action_dim
-
-        return v_t

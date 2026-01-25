@@ -31,13 +31,13 @@ class RegressionPolicy(BasePolicy):
         self, batch: Dict[str, jnp.ndarray], rng: Optional[chex.PRNGKey] = None
     ) -> chex.Array:
         img_key = next(iter(self.config.image_features.keys()))
-        x = batch[img_key]
+        img = batch[img_key]
 
         actions = batch["action"]
 
-        pred_actions = self(x)
+        pred_actions = self.encoder(img)
 
-        # TODO: propely handle horizon dimension
+        # (B, action_dim) or (B, H, action_dim)
         pred_actions = jnp.reshape(pred_actions, actions.shape)
 
         loss = optax.l2_loss(predictions=pred_actions, targets=actions)
@@ -49,11 +49,8 @@ class RegressionPolicy(BasePolicy):
         self, batch: Dict[str, jnp.ndarray], rng: Optional[chex.PRNGKey] = None
     ) -> jnp.ndarray:
         img_key = next(iter(self.config.image_features.keys()))
-        x = batch[img_key]
+        img = batch[img_key]
 
-        pred_actions = self(x)
+        pred_actions = self.encoder(img)
+
         return pred_actions
-
-    def __call__(self, x):
-        x = self.encoder(x)
-        return x
