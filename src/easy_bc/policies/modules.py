@@ -3,6 +3,25 @@ import jax.numpy as jnp
 from flax import nnx
 
 
+class SinusoidalPosEmb(nnx.Module):
+    """
+    Sinusoidal Positional Embedding
+    """
+
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+
+        self.dim = dim
+
+    def __call__(self, x):
+        half_dim = self.dim // 2
+        emb = jnp.log(10000) / (half_dim - 1)
+        emb = jnp.exp(jnp.arange(half_dim) * -emb)
+        emb = x[:, None] * emb[None, :]
+        emb = jnp.concatenate([jnp.sin(emb), jnp.cos(emb)], axis=-1)
+        return emb
+
+
 class Conv1DBlock(nnx.Module):
     """
     1D Convolution Block: Conv1D → Norm → activation
@@ -121,7 +140,6 @@ class ConditionalUnet1D(nnx.Module):
         super().__init__()
 
         down_dims = (feature_dim, *down_dims)
-        cond_dim = cond_dim + 1  # for timestep embedding
 
         self.down_blocks = nnx.List()
         i = 1
@@ -185,15 +203,11 @@ class ConditionalUnet1D(nnx.Module):
 
             i += 1
 
-    def __call__(self, x, cond, timestep):
+    def __call__(self, x, cond):
         """
         x: [B, H, input_dim]
         cond: [B, cond_dim]
-        timestep: [B,]
         """
-
-        # TODO: Use a proper timestep embedding instead of just concatenating the raw timestep
-        cond = jnp.concatenate([cond, timestep[:, None].astype(cond.dtype)], axis=-1)
 
         skip_connections = []
         for block, downsample in self.down_blocks:

@@ -1,5 +1,6 @@
 from typing import Dict
 import jax
+from lerobot.utils.constants import ACTION, OBS_STATE
 import optax
 from typing_extensions import override
 
@@ -9,7 +10,12 @@ from flax import nnx
 
 from easy_bc.policies.flow_unet.configuration_flow_unet import FlowUnetConfig
 from easy_bc.policies.policy import BasePolicy
-from easy_bc.policies.modules import ConditionalUnet1D, Conv1DBlock, RGBEncoder
+from easy_bc.policies.modules import (
+    ConditionalUnet1D,
+    Conv1DBlock,
+    RGBEncoder,
+    SinusoidalPosEmb,
+)
 
 
 class FlowUnetPolicy(BasePolicy):
@@ -22,6 +28,9 @@ class FlowUnetPolicy(BasePolicy):
 
         action_dim = next(iter(self.config.output_features.values())).shape[0]
         images_shape = next(iter(config.image_features.values())).shape  # C, H, W
+        state_dim = (
+            config.robot_state_feature.shape[0] if config.robot_state_feature else 0
+        )
 
         self.rgb_encoder = RGBEncoder(
             images_shape=images_shape,
@@ -32,7 +41,9 @@ class FlowUnetPolicy(BasePolicy):
         # TODO: support env state features
         self.unet = ConditionalUnet1D(
             feature_dim=self.config.latent_dim,
-            cond_dim=self.config.img_feature_dim,
+            cond_dim=state_dim
+            + self.config.img_feature_dim
+            + self.config.time_embedding_dim,
             down_dims=self.config.down_dims,
             kernel_size=self.config.kernel_size,
             num_groups=self.config.n_groups,
@@ -73,13 +84,32 @@ class FlowUnetPolicy(BasePolicy):
             ),
         )
 
+        self.time_embedding = nnx.Sequential(
+            SinusoidalPosEmb(self.config.time_embedding_dim),
+            nnx.Linear(
+                in_features=self.config.time_embedding_dim,
+                out_features=self.config.time_embedding_dim * 4,
+                rngs=rngs,
+            ),
+            nnx.swish,
+            nnx.Linear(
+                in_features=self.config.time_embedding_dim * 4,
+                out_features=self.config.time_embedding_dim,
+                rngs=rngs,
+            ),
+        )
+
     def pred_action_flow(
         self, x_t: jnp.ndarray, cond: jnp.ndarray, timestep: jnp.ndarray
     ):
+        timestep_embed = self.time_embedding(timestep)  # B, time_embedding_dim
+
+        cond = jnp.concatenate(
+            [cond, timestep_embed], axis=-1
+        )  # B, img_feature_dim + time_embedding_dim
+
         latent_actions = self.action_in_projection(x_t)  # B, H, latent_dim
-        pred_latent_actions = self.unet(
-            latent_actions, cond, timestep
-        )  # B, H, latent_dim
+        pred_latent_actions = self.unet(latent_actions, cond)  # B, H, latent_dim
         v_t = self.action_out_projection(pred_latent_actions)  # B, H, action_dim
 
         return v_t
@@ -89,11 +119,13 @@ class FlowUnetPolicy(BasePolicy):
         self, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
     ) -> chex.Array:
         noise_rng, time_rng = jax.random.split(rng, 2)
+
         img_key = next(iter(self.config.image_features.keys()))
         img = batch[img_key]  # B, C, H, W
 
-        action_key = next(iter(self.config.output_features.keys()))
-        actions = batch[action_key]  # B, H, action_dim
+        state = batch[OBS_STATE]
+
+        actions = batch[ACTION]  # B, H, action_dim
 
         B, H, _ = actions.shape
 
@@ -112,7 +144,11 @@ class FlowUnetPolicy(BasePolicy):
 
         img_feature = self.rgb_encoder(img)  # B, img_feature_dim
 
-        v_t = self.pred_action_flow(x_t, img_feature, time)  # B, H, action_dim
+        cond = jnp.concatenate(
+            [state, img_feature], axis=-1
+        )  # B, state_dim + img_feature_dim
+
+        v_t = self.pred_action_flow(x_t, cond, time)  # B, H, action_dim
 
         loss = optax.l2_loss(predictions=v_t, targets=u_t).mean(axis=-1)
 
@@ -124,6 +160,8 @@ class FlowUnetPolicy(BasePolicy):
     ) -> jnp.ndarray:
         img_key = next(iter(self.config.image_features.keys()))
         img = batch[img_key]  # B, C, H, W
+
+        state = batch[OBS_STATE]
 
         B, H, action_dim = (
             img.shape[0],
@@ -142,20 +180,22 @@ class FlowUnetPolicy(BasePolicy):
 
         img_feature = self.rgb_encoder(img)  # B, img_feature_dim
 
+        cond = jnp.concatenate(
+            [state, img_feature], axis=-1
+        )  # B, state_dim + img_feature_dim
+
         def step(carry):
             x_t, t = carry
 
             time_batched = jnp.full((B,), t, dtype=dtype)
-            v_t = self.pred_action_flow(
-                x_t, img_feature, time_batched
-            )  # B, H, action_dim
+            v_t = self.pred_action_flow(x_t, cond, time_batched)  # B, H, action_dim
 
             return x_t - dt * v_t, t - dt
 
-        def cond(carry):
+        def condition(carry):
             _, t = carry
             return t >= dt / 2.0
 
-        x_0, _ = nnx.while_loop(cond, step, (noise, 1.0))
+        x_0, _ = nnx.while_loop(condition, step, (noise, 1.0))
 
         return x_0

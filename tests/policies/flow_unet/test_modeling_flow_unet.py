@@ -57,6 +57,7 @@ def flow_unet_config(dataset_metadata) -> FlowUnetConfig:
         output_features=output_features,
         img_feature_dim=32,
         latent_dim=64,
+        time_embedding_dim=128,
         down_dims=(64, 128),
         kernel_size=5,
         n_groups=8,

@@ -12,6 +12,7 @@ from easy_bc.policies.modules import (
     Conv1DBlock,
     ConditionalResidual1DBlock,
     ConditionalUnet1D,
+    SinusoidalPosEmb,
 )
 
 
@@ -41,6 +42,48 @@ def _jit_parity(
 
 
 @pytest.mark.parametrize(
+    "B,dim",
+    [
+        (1, 8),
+        (2, 32),
+        (4, 64),
+    ],
+)
+def test_sinusoidal_pos_emb_forward(B, dim):
+    model = SinusoidalPosEmb(dim=dim)
+
+    x = jax.random.uniform(
+        jax.random.PRNGKey(0),
+        (B,),
+        minval=0.0,
+        maxval=1.0,
+        dtype=jnp.float32,
+    )
+
+    y = model(x)
+
+    assert y.shape == (B, dim)
+    assert y.dtype == x.dtype
+    assert jnp.isfinite(y).all()
+
+
+def test_sinusoidal_pos_emb_jittable():
+    dim = 64
+    model = SinusoidalPosEmb(dim=dim)
+
+    B = 4
+    x = jax.random.uniform(
+        jax.random.PRNGKey(1),
+        (B,),
+        minval=0.0,
+        maxval=1.0,
+        dtype=jnp.float32,
+    )
+
+    _jit_parity(model, (x,), rtol=1e-4, atol=1e-5)
+
+
+@pytest.mark.parametrize(
     "B,H,feature_dim,cond_dim,down_dims,kernel_size,num_groups",
     [
         (2, 32, 8, 7, (32, 64), 3, 8),
@@ -62,9 +105,8 @@ def test_conditional_unet1d_forward(
 
     x = jax.random.normal(jax.random.PRNGKey(0), (B, H, feature_dim), dtype=jnp.float32)
     cond = jax.random.normal(jax.random.PRNGKey(1), (B, cond_dim), dtype=jnp.float32)
-    timestep = jax.random.uniform(jax.random.PRNGKey(2), (B,), dtype=jnp.float32)
 
-    y = model(x, cond, timestep)
+    y = model(x, cond)
 
     assert y.shape == (B, H, feature_dim)
     assert y.dtype == x.dtype
@@ -87,9 +129,8 @@ def test_conditional_unet1d_jittable(rngs):
         jax.random.PRNGKey(10), (B, H, feature_dim), dtype=jnp.float32
     )
     cond = jax.random.normal(jax.random.PRNGKey(11), (B, cond_dim), dtype=jnp.float32)
-    timestep = jax.random.uniform(jax.random.PRNGKey(2), (B,), dtype=jnp.float32)
 
-    _jit_parity(model, (x, cond, timestep), rtol=1e-4, atol=1e-5)
+    _jit_parity(model, (x, cond), rtol=1e-4, atol=1e-5)
 
 
 @pytest.mark.parametrize(

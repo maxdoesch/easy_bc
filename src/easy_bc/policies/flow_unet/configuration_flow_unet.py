@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import NormalizationMode
-from lerobot.optim.optimizers import AdamConfig
 
 
 @PreTrainedConfig.register_subclass("flow_unet")
@@ -26,8 +25,6 @@ class FlowUnetConfig(PreTrainedConfig):
         - "action" is required as an output key.
 
     Args:
-        crop_shape: (H, W) shape to crop images to as a preprocessing step for the vision backbone. Must fit
-            within the image size. If None, no cropping is done.
         down_dims: Feature dimension for each stage of temporal downsampling in the flow unet modeling Unet.
             You may provide a variable number of dimensions, therefore also controlling the degree of
             downsampling.
@@ -39,28 +36,23 @@ class FlowUnetConfig(PreTrainedConfig):
         default_factory=lambda: {
             "VISUAL": NormalizationMode.MEAN_STD,
             "STATE": NormalizationMode.MIN_MAX,
-            "ACTION": NormalizationMode.MIN_MAX,
+            "ACTION": NormalizationMode.MEAN_STD,
         }
     )
 
     horizon: int = 16
 
     # RGBEncoder
-    img_feature_dim: int = 512
+    img_feature_dim: int = 256
+
+    time_embedding_dim: int = 64
+
+    latent_dim: int = 64
 
     # Unet.
-    latent_dim: int = 64
     down_dims: tuple[int, ...] = (64, 128, 256)
     kernel_size: int = 5
     n_groups: int = 8
-
-    # Training presets
-    optimizer_lr: float = 1e-4
-    optimizer_betas: tuple = (0.95, 0.999)
-    optimizer_eps: float = 1e-8
-    optimizer_weight_decay: float = 1e-6
-    scheduler_name: str = "cosine"
-    scheduler_warmup_steps: int = 500
 
     num_inference_steps: int = 10
 
@@ -69,31 +61,14 @@ class FlowUnetConfig(PreTrainedConfig):
 
         pass
 
-    def get_optimizer_preset(self) -> AdamConfig:
-        return AdamConfig(
-            lr=self.optimizer_lr,
-            betas=self.optimizer_betas,
-            eps=self.optimizer_eps,
-            weight_decay=self.optimizer_weight_decay,
-        )
+    def get_optimizer_preset(self) -> None:
+        return None
 
     def validate_features(self) -> None:
         if len(self.image_features) == 0 and self.env_state_feature is None:
             raise ValueError(
                 "You must provide at least one image or the environment state among the inputs."
             )
-
-        if self.crop_shape is not None:
-            for key, image_ft in self.image_features.items():
-                if (
-                    self.crop_shape[0] > image_ft.shape[1]
-                    or self.crop_shape[1] > image_ft.shape[2]
-                ):
-                    raise ValueError(
-                        f"`crop_shape` should fit within the images shapes. Got {self.crop_shape} "
-                        f"for `crop_shape` and {image_ft.shape} for "
-                        f"`{key}`."
-                    )
 
         # Check that all input images have the same shape.
         if len(self.image_features) > 0:

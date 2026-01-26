@@ -79,6 +79,6 @@ class Evaluator:
         pbar.close()
 
         # n_envs, F, H, W, C
-        episode_images_tensor = [np.stack(episode) for episode in episode_images]
+        episode_frames = [np.stack(episode) for episode in episode_images]
 
-        return np.mean(total_returns).item(), episode_images_tensor
+        return np.mean(total_returns).item(), episode_frames

@@ -1,8 +1,19 @@
-import dataclasses
 import os
+import warnings
+
+try:
+    from pydantic.warnings import UnsupportedFieldAttributeWarning
+
+    warnings.filterwarnings("ignore", category=UnsupportedFieldAttributeWarning)
+except Exception:
+    pass
+
+import dataclasses
 import chex
 import tyro
+import numpy as np
 from tqdm import tqdm
+import multiprocessing as mp
 import wandb
 from pathlib import Path
 from datetime import datetime
@@ -32,6 +43,10 @@ from easy_bc.policies.factory import (
     make_pre_post_processors,
 )
 
+from pydantic.warnings import UnsupportedFieldAttributeWarning
+
+warnings.filterwarnings("ignore", category=UnsupportedFieldAttributeWarning)
+
 
 @dataclass()
 class TrainConfig:
@@ -55,6 +70,26 @@ class TrainConfig:
     env_id: Optional[str] = None
     num_envs: int = 1
     evaluator: EvaluatorConfig = field(default_factory=lambda: EvaluatorConfig())
+
+
+def _write_video_worker(path_str: str, frames: np.ndarray, fps: int):
+    from pathlib import Path as _Path
+    from lerobot.utils.io_utils import write_video as _write_video
+
+    _write_video(_Path(path_str), frames, fps=fps)
+
+
+def write_video_spawn(video_path: Path, frames: np.ndarray, fps: int):
+    ctx = mp.get_context("spawn")
+
+    p = ctx.Process(
+        target=_write_video_worker,
+        args=(str(video_path), frames, int(fps)),
+    )
+    p.start()
+    p.join()
+    if p.exitcode != 0:
+        raise RuntimeError(f"write_video worker failed with exit code {p.exitcode}")
 
 
 @nnx.jit
@@ -112,6 +147,9 @@ def main(cfg: TrainConfig):
         batch_size=cfg.batch_size,
         shuffle=True,
         drop_last=True,
+        num_workers=4,
+        multiprocessing_context="spawn",
+        persistent_workers=True,
     )
 
     evaluator = None
@@ -124,7 +162,13 @@ def main(cfg: TrainConfig):
 
         evaluator = Evaluator(envs=eval_envs, cfg=cfg.evaluator)
 
-    optimizer = nnx.Optimizer(policy, optax.adamw(learning_rate=1e-3), wrt=nnx.Param)
+    scheduler = optax.cosine_decay_schedule(
+        init_value=1e-4, decay_steps=cfg.train_steps, alpha=1e-5
+    )
+
+    optimizer = nnx.Optimizer(
+        policy, optax.adamw(learning_rate=scheduler), wrt=nnx.Param
+    )
 
     policy.train()
 
@@ -168,7 +212,7 @@ def main(cfg: TrainConfig):
 
                 if evaluator and (i % cfg.eval_freq == 0 and i > 0):
                     policy.eval()
-                    total_returns, _ = evaluator.evaluate(
+                    total_returns, episode_frames = evaluator.evaluate(
                         policy=policy,
                         preprocessor=lambda x: preprocessor(preprocess_observation(x)),
                         postprocessor=postprocessor,
@@ -180,6 +224,20 @@ def main(cfg: TrainConfig):
                     wandb.log(
                         {
                             "eval/return": avg_return,
+                        },
+                        step=i,
+                    )
+
+                    video_dir = ckpt_dir / "videos"
+                    video_dir.mkdir(parents=True, exist_ok=True)
+                    video_path = video_dir / f"eval_{i:08d}.mp4"
+                    write_video_spawn(video_path, episode_frames[0], fps=env_cfg.fps)
+                    wandb.log(
+                        {
+                            "eval/video": wandb.Video(
+                                str(video_path),
+                                format="mp4",
+                            )
                         },
                         step=i,
                     )
@@ -208,4 +266,5 @@ def main(cfg: TrainConfig):
 
 
 if __name__ == "__main__":
+    mp.set_start_method("spawn", force=True)
     tyro.cli(main)
