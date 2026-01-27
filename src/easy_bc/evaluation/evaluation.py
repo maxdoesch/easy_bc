@@ -1,13 +1,13 @@
-import chex
-import tqdm
-import torch
-import numpy as np
-from typing import Callable
 from dataclasses import dataclass
-from gymnasium.vector.vector_env import VectorEnv
+from typing import Callable
 
+import chex
 import jax
 import jax.numpy as jnp
+import numpy as np
+import torch
+import tqdm
+from gymnasium.vector.vector_env import VectorEnv
 
 from easy_bc.policies.policy import BasePolicy
 

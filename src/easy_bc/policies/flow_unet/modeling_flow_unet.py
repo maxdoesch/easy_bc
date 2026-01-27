@@ -1,21 +1,21 @@
 from typing import Dict
-import jax
-from lerobot.utils.constants import ACTION, OBS_STATE
-import optax
-from typing_extensions import override
 
 import chex
+import jax
 import jax.numpy as jnp
+import optax
 from flax import nnx
+from lerobot.utils.constants import ACTION, OBS_STATE
+from typing_extensions import override
 
 from easy_bc.policies.flow_unet.configuration_flow_unet import FlowUnetConfig
-from easy_bc.policies.policy import BasePolicy
 from easy_bc.policies.modules import (
     ConditionalUnet1D,
     Conv1DBlock,
     RGBEncoder,
     SinusoidalPosEmb,
 )
+from easy_bc.policies.policy import BasePolicy
 
 
 class FlowUnetPolicy(BasePolicy):

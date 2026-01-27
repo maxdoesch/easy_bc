@@ -1,15 +1,14 @@
-import pytest
 import jax
 import jax.numpy as jnp
-from flax import nnx
 import orbax.checkpoint as ocp
-
-from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotDataset
-from lerobot.datasets.utils import dataset_to_policy_features
+import pytest
+from flax import nnx
 from lerobot.configs.types import FeatureType
+from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.datasets.utils import dataset_to_policy_features
 
-from easy_bc.policies.flow_unet.modeling_flow_unet import FlowUnetPolicy
 from easy_bc.policies.flow_unet.configuration_flow_unet import FlowUnetConfig
+from easy_bc.policies.flow_unet.modeling_flow_unet import FlowUnetPolicy
 
 
 def _keep_keys(config) -> set[str]:

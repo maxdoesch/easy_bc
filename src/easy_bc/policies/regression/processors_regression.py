@@ -1,8 +1,6 @@
 from typing import Any
 
 import torch
-
-from easy_bc.policies.regression.configuration_regression import RegressionConfig
 from lerobot.processor import (
     NormalizerProcessorStep,
     PolicyAction,
@@ -17,6 +15,8 @@ from lerobot.utils.constants import (
     POLICY_POSTPROCESSOR_DEFAULT_NAME,
     POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
+
+from easy_bc.policies.regression.configuration_regression import RegressionConfig
 
 
 def make_processors_regression_pre_post_processors(

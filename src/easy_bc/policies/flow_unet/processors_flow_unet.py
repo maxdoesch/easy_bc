@@ -1,8 +1,6 @@
 from typing import Any
 
 import torch
-
-from easy_bc.policies.flow_unet.configuration_flow_unet import FlowUnetConfig
 from lerobot.processor import (
     NormalizerProcessorStep,
     PolicyAction,
@@ -17,6 +15,8 @@ from lerobot.utils.constants import (
     POLICY_POSTPROCESSOR_DEFAULT_NAME,
     POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
+
+from easy_bc.policies.flow_unet.configuration_flow_unet import FlowUnetConfig
 
 
 def make_processors_flow_unet_pre_post_processors(

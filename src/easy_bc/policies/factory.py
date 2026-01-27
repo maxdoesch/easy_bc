@@ -1,26 +1,25 @@
-import numpy as np
 from typing import Any, Optional, Type
 
+import numpy as np
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.types import FeatureType
+from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.envs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
+from lerobot.processor import PolicyAction, PolicyProcessorPipeline
 
 from easy_bc.policies.flow_unet.configuration_flow_unet import FlowUnetConfig
-from easy_bc.policies.policy import BasePolicy
-from easy_bc.policies.regression.configuration_regression import RegressionConfig
 from easy_bc.policies.flow_unet.modeling_flow_unet import FlowUnetPolicy
-from easy_bc.policies.regression.modeling_regression import RegressionPolicy
 from easy_bc.policies.flow_unet.processors_flow_unet import (
     make_processors_flow_unet_pre_post_processors,
 )
+from easy_bc.policies.policy import BasePolicy
+from easy_bc.policies.regression.configuration_regression import RegressionConfig
+from easy_bc.policies.regression.modeling_regression import RegressionPolicy
 from easy_bc.policies.regression.processors_regression import (
     make_processors_regression_pre_post_processors,
 )
-
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.datasets.utils import dataset_to_policy_features
-from lerobot.configs.types import FeatureType
-from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
-from lerobot.processor import PolicyAction, PolicyProcessorPipeline
 
 
 def make_policy_config(

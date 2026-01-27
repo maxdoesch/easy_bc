@@ -9,43 +9,37 @@ except Exception:
     pass
 
 import dataclasses
-import chex
-import tyro
-import numpy as np
-from tqdm import tqdm
 import multiprocessing as mp
-import wandb
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, Optional
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Optional
 
-import jax
+import chex
 import flax.nnx as nnx
+import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import orbax.checkpoint as ocp
-
-from torch.utils.data import DataLoader
-
-from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotDataset
+import tyro
+from lerobot.datasets.factory import resolve_delta_timestamps
+from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import write_stats
 from lerobot.envs.factory import make_env, make_env_config
 from lerobot.envs.utils import preprocess_observation
-from lerobot.datasets.factory import resolve_delta_timestamps
+from pydantic.warnings import UnsupportedFieldAttributeWarning
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-from easy_bc.policies.policy import BasePolicy
+import wandb
 from easy_bc.evaluation.evaluation import Evaluator, EvaluatorConfig
-
 from easy_bc.policies.factory import (
-    make_policy_config,
     make_policy,
+    make_policy_config,
     make_pre_post_processors,
 )
-
-from pydantic.warnings import UnsupportedFieldAttributeWarning
-
-warnings.filterwarnings("ignore", category=UnsupportedFieldAttributeWarning)
+from easy_bc.policies.policy import BasePolicy
 
 
 @dataclass()
@@ -74,6 +68,7 @@ class TrainConfig:
 
 def _write_video_worker(path_str: str, frames: np.ndarray, fps: int):
     from pathlib import Path as _Path
+
     from lerobot.utils.io_utils import write_video as _write_video
 
     _write_video(_Path(path_str), frames, fps=fps)

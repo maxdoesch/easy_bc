@@ -1,10 +1,10 @@
 from typing import Dict, Optional
-from typing_extensions import override
 
-import optax
 import chex
 import jax.numpy as jnp
+import optax
 from flax import nnx
+from typing_extensions import override
 
 from easy_bc.policies.modules import RGBEncoder
 from easy_bc.policies.policy import BasePolicy

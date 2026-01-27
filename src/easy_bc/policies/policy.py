@@ -2,8 +2,8 @@ import abc
 from typing import Dict, Optional
 
 import chex
-from flax import nnx
 import jax.numpy as jnp
+from flax import nnx
 
 
 class BasePolicy(nnx.Module, abc.ABC):

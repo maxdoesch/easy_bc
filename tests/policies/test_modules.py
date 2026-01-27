@@ -1,17 +1,15 @@
-import pytest
-
+import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
-import flax.nnx as nnx
-
+import pytest
 
 from easy_bc.policies.modules import (
-    EncoderStem,
-    EncoderBlock,
-    RGBEncoder,
-    Conv1DBlock,
     ConditionalResidual1DBlock,
     ConditionalUnet1D,
+    Conv1DBlock,
+    EncoderBlock,
+    EncoderStem,
+    RGBEncoder,
     SinusoidalPosEmb,
 )
 

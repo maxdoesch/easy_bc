@@ -1,26 +1,23 @@
 import os
-import tyro
-import imageio
-from pathlib import Path
-import numpy as np
 from dataclasses import dataclass
+from pathlib import Path
 
+import imageio
 import jax
-from flax import nnx
+import numpy as np
 import orbax.checkpoint as ocp
+import tyro
+from flax import nnx
+from lerobot.datasets.utils import load_stats
+from lerobot.envs.factory import PushtEnv, make_env
+from lerobot.envs.utils import preprocess_observation
 
+from easy_bc.evaluation.evaluation import Evaluator, EvaluatorConfig
 from easy_bc.policies.factory import (
     make_policy,
     make_policy_config,
     make_pre_post_processors,
 )
-from easy_bc.evaluation.evaluation import EvaluatorConfig, Evaluator
-
-
-from lerobot.envs.factory import make_env
-from lerobot.datasets.utils import load_stats
-from lerobot.envs.utils import preprocess_observation
-from lerobot.envs.factory import PushtEnv
 
 
 @dataclass
