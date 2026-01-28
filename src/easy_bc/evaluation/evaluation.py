@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, TypedDict
 
 import chex
 import jax
@@ -18,6 +18,14 @@ class EvaluatorConfig:
     seed: int = 42
 
 
+class EvalMetrics(TypedDict):
+    sum_rewards: list[float]
+    max_rewards: list[float]
+    successes: list[bool]
+
+    video_frames: list[np.ndarray]
+
+
 class Evaluator:
     def __init__(self, envs: VectorEnv, cfg: EvaluatorConfig):
         self.cfg = cfg
@@ -29,20 +37,24 @@ class Evaluator:
         preprocessor: Callable,
         postprocessor: Callable,
         eval_rng: chex.PRNGKey,
-    ) -> tuple[float, list[np.ndarray]]:
-        total_returns = []
-        episodes_finished = 0
+    ) -> EvalMetrics:
+        sum_rewards = []
+        max_rewards = []
+        successes = []
+        video_frames = []
+
+        current_sum_rewards = np.zeros(self.envs.num_envs, dtype=np.float32)
+        current_max_rewards = np.full(self.envs.num_envs, -np.inf, dtype=np.float32)
+        frames_per_env: list[list[np.ndarray]] = [[] for _ in range(self.envs.num_envs)]
+
         obs, info = self.envs.reset(seed=self.cfg.seed)
         done = np.zeros(self.envs.num_envs, dtype=bool)
-        episode_return = np.zeros(self.envs.num_envs, dtype=np.float32)
-        episode_steps = np.zeros(self.envs.num_envs, dtype=np.int32)
 
         jit_sample_action = jax.jit(policy.sample_action)
 
         pbar = tqdm.tqdm(total=self.cfg.n_episodes, desc="Evaluating", unit="ep")
 
-        episode_images: list[list[np.ndarray]] = []
-        frames_per_env: list[list[np.ndarray]] = [[] for _ in range(self.envs.num_envs)]
+        episodes_finished = 0
         while episodes_finished < self.cfg.n_episodes:
             eval_rng, step_rng = jax.random.split(eval_rng)
 
@@ -61,8 +73,12 @@ class Evaluator:
             for i in range(policy.n_action_steps):
                 obs, reward, terminated, truncated, info = self.envs.step(action[:, i])
 
-                episode_return += reward
-                episode_steps += 1
+                current_sum_rewards += reward
+                current_max_rewards = np.maximum(current_max_rewards, reward)
+                is_success = info.get(
+                    "is_success", np.array([False] * self.envs.num_envs)
+                )
+
                 done = terminated | truncated
 
                 frames = self.envs.render()
@@ -71,22 +87,29 @@ class Evaluator:
 
                 if done.any():
                     done_idxs = np.nonzero(done)[0]
-                    for done_idx in done_idxs:
-                        if episodes_finished >= self.cfg.n_episodes:
-                            break
-                        total_returns.append(
-                            episode_return[done_idx] / episode_steps[done_idx]
-                        )
-                        episodes_finished += 1
-                        pbar.update(1)
 
-                        episode_images.append(frames_per_env[done_idx])
-                        frames_per_env[done_idx] = []
+                    sum_rewards.extend(current_sum_rewards[done].tolist())
+                    max_rewards.extend(current_max_rewards[done].tolist())
+                    successes.extend(is_success[done].tolist())
 
-                    episode_return[done] = 0.0
+                    video_frames.extend(
+                        [np.stack(frames_per_env[i]) for i in done_idxs]
+                    )
+
+                    episodes_finished += len(done_idxs)
+                    pbar.update(len(done_idxs))
+
+                    current_sum_rewards[done] = 0.0
+                    current_max_rewards[done] = 0.0
+
+                    for i in done_idxs:
+                        frames_per_env[i] = []
+
         pbar.close()
 
-        # n_envs, F, H, W, C
-        episode_frames = [np.stack(episode) for episode in episode_images]
-
-        return np.mean(total_returns).item() * 100, episode_frames
+        return EvalMetrics(
+            sum_rewards=sum_rewards,
+            max_rewards=max_rewards,
+            successes=successes,
+            video_frames=video_frames,
+        )

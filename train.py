@@ -65,6 +65,8 @@ class TrainConfig:
     num_envs: int = 1
     evaluator: EvaluatorConfig = field(default_factory=lambda: EvaluatorConfig())
 
+    wandb_enabled: bool = True
+
 
 def _write_video_worker(path_str: str, frames: np.ndarray, fps: int):
     from pathlib import Path as _Path
@@ -110,7 +112,10 @@ def train_step(
 
 def main(cfg: TrainConfig):
     wandb.init(
-        project=cfg.project_name, name=cfg.exp_name, config=dataclasses.asdict(cfg)
+        project=cfg.project_name,
+        name=cfg.exp_name,
+        config=dataclasses.asdict(cfg),
+        mode="online" if cfg.wandb_enabled else "disabled",
     )
 
     init_rng = jax.random.PRNGKey(cfg.seed)
@@ -211,18 +216,19 @@ def main(cfg: TrainConfig):
                     and (i % cfg.eval_freq == 0 or i == cfg.train_steps - 1)
                 ):
                     policy.eval()
-                    total_returns, episode_frames = evaluator.evaluate(
+                    eval_metrics = evaluator.evaluate(
                         policy=policy,
                         preprocessor=lambda x: preprocessor(preprocess_observation(x)),
                         postprocessor=postprocessor,
                         eval_rng=eval_rng,
                     )
-                    avg_return = jnp.mean(total_returns)
                     policy.train()
 
                     wandb.log(
                         {
-                            "eval/return": avg_return,
+                            "eval/sum_reward": np.mean(eval_metrics["sum_rewards"]),
+                            "eval/max_reward": np.mean(eval_metrics["max_rewards"]),
+                            "eval/success_rate": np.mean(eval_metrics["successes"]),
                         },
                         step=i,
                     )
@@ -230,7 +236,9 @@ def main(cfg: TrainConfig):
                     video_dir = ckpt_dir / "videos"
                     video_dir.mkdir(parents=True, exist_ok=True)
                     video_path = video_dir / f"eval_{i:08d}.mp4"
-                    write_video_spawn(video_path, episode_frames[0], fps=env_cfg.fps)
+                    write_video_spawn(
+                        video_path, eval_metrics["video_frames"][0], fps=env_cfg.fps
+                    )
                     wandb.log(
                         {
                             "eval/video": wandb.Video(
