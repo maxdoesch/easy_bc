@@ -3,6 +3,13 @@ import jax.numpy as jnp
 from flax import nnx
 
 
+def get_output_shape(module: nnx.Module, input_shape: tuple) -> tuple:
+    """Utility function to get the output shape of a module given an input shape."""
+    dummy_input = jnp.zeros((1, *input_shape))
+    output = module(dummy_input)
+    return output.shape[1:]
+
+
 class SinusoidalPosEmb(nnx.Module):
     """
     Sinusoidal Positional Embedding
@@ -302,9 +309,71 @@ class EncoderBlock(nnx.Module):
         return x
 
 
+class SpatialSoftmax(nnx.Module):
+    """
+    Spatial Soft Argmax operation described in
+    "Deep Spatial Autoencoders for Visuomotor Learning" by Finn et al.
+    """
+
+    def __init__(self, input_shape: tuple, num_keypoints: int, rngs: nnx.Rngs):
+        """
+        input_shape: (H, W, C)
+        num_keypoints: int
+        """
+        super().__init__()
+
+        assert len(input_shape) == 3
+        self._in_h, self._in_w, self._in_c = input_shape
+
+        self.projection = nnx.Conv(
+            in_features=self._in_c,
+            out_features=num_keypoints,
+            kernel_size=(1, 1),
+            rngs=rngs,
+        )
+        self._out_c = num_keypoints
+
+        pos_x, pos_y = jnp.meshgrid(
+            jnp.linspace(-1.0, 1.0, self._in_w),
+            jnp.linspace(-1.0, 1.0, self._in_h),  # (H, W), (H, W)
+        )
+
+        pos_x = einops.rearrange(pos_x, "H W -> (H W) 1")  # (H*W, 1)
+        pos_y = einops.rearrange(pos_y, "H W -> (H W) 1")  # (H*W, 1)
+
+        self.pos_grid = jnp.concatenate([pos_x, pos_y], axis=1)  # (H*W, 2)
+
+    def __call__(self, x):
+        """
+        x: [B, H, W, C]
+        returns: [B, num_keypoints * 2]
+        """
+
+        x = self.projection(x)  # [B, H, W, num_keypoints]
+        b, h, w, n = x.shape
+
+        x = einops.rearrange(x, "B H W N -> (B N) (H W)")  # [B * num_keypoints, H * W]
+
+        attn = nnx.softmax(x, axis=-1)  # [B * num_keypoints, H * W]
+
+        expected_xy = attn @ self.pos_grid  # [B * num_keypoints, 2]
+
+        feature_keypoints = einops.rearrange(
+            expected_xy, "(B N) D -> B (N D)", N=n, D=2
+        )  # [B, num_keypoints * 2]
+
+        return feature_keypoints
+
+
 class RGBEncoder(nnx.Module):
     def __init__(self, images_shape: tuple, out_feature_dim: int, rngs: nnx.Rngs):
+        """
+        images_shape: (C, H, W)
+        out_feature_dim: int, must be even
+        """
         super().__init__()
+
+        assert out_feature_dim % 2 == 0, "out_feature_dim must be even."
 
         self.feature_dims = [32, 64, 128, 128, 256, 256, 512]
 
@@ -326,8 +395,19 @@ class RGBEncoder(nnx.Module):
 
             self.encoder_blocks.append(block)
 
+        feature_map_shape = get_output_shape(
+            nnx.Sequential(self.encoder_stem, *self.encoder_blocks),
+            (*images_shape[1:], images_shape[0]),
+        )  # H, W, C
+
+        self.spatial_softmax = SpatialSoftmax(
+            input_shape=feature_map_shape,
+            num_keypoints=out_feature_dim // 2,
+            rngs=rngs,
+        )
+
         self.head = nnx.Linear(
-            in_features=self.feature_dims[-1],
+            in_features=out_feature_dim,
             out_features=out_feature_dim,
             rngs=rngs,
         )
@@ -338,8 +418,7 @@ class RGBEncoder(nnx.Module):
         for block in self.encoder_blocks:
             x = block(x)
 
-        # TODO: Replace the global average pooling with a spatial softmax pooling to maintain spatial information
-        x = nnx.avg_pool(x, window_shape=x.shape[1:3])  # Global average pool
-        x = einops.rearrange(x, "B 1 1 C -> B C")
-        x = self.head(x)
+        x = self.spatial_softmax(x)  # [B, out_feature_dim]
+
+        x = self.head(x)  # [B, out_feature_dim]
         return x

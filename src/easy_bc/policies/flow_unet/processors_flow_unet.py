@@ -41,7 +41,8 @@ def make_processors_flow_unet_pre_post_processors(
 
     Args:
         config: The configuration object for the flow_unet policy,
-            containing feature definitions, normalization mappings, and device information.
+            containing feature definitions, normalization mappings,
+            and device information.
         dataset_stats: A dictionary of statistics used for normalization.
             Defaults to None.
 

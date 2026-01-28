@@ -15,6 +15,7 @@ from easy_bc.policies.policy import BasePolicy
 @dataclass
 class EvaluatorConfig:
     n_episodes: int = 10
+    seed: int = 42
 
 
 class Evaluator:
@@ -31,9 +32,10 @@ class Evaluator:
     ) -> tuple[float, list[np.ndarray]]:
         total_returns = []
         episodes_finished = 0
-        obs, info = self.envs.reset()
+        obs, info = self.envs.reset(seed=self.cfg.seed)
         done = np.zeros(self.envs.num_envs, dtype=bool)
         episode_return = np.zeros(self.envs.num_envs, dtype=np.float32)
+        episode_steps = np.zeros(self.envs.num_envs, dtype=np.int32)
 
         jit_sample_action = jax.jit(policy.sample_action)
 
@@ -49,14 +51,18 @@ class Evaluator:
 
             action = jit_sample_action(observation, rng=step_rng)
             action = torch.tensor(np.array(action), device="cpu")
+
             action = postprocessor(action)
 
-            action = action.view(self.envs.num_envs, -1, action.shape[-1])
+            assert policy.n_action_steps <= action.shape[1], (
+                "Policy n_action_steps must be <= the action horizon"
+            )
 
-            for i in range(action.shape[1]):
+            for i in range(policy.n_action_steps):
                 obs, reward, terminated, truncated, info = self.envs.step(action[:, i])
 
                 episode_return += reward
+                episode_steps += 1
                 done = terminated | truncated
 
                 frames = self.envs.render()
@@ -65,15 +71,17 @@ class Evaluator:
 
                 if done.any():
                     done_idxs = np.nonzero(done)[0]
-                    for i in done_idxs:
+                    for done_idx in done_idxs:
                         if episodes_finished >= self.cfg.n_episodes:
                             break
-                        total_returns.append(float(episode_return[i]))
+                        total_returns.append(
+                            episode_return[done_idx] / episode_steps[done_idx]
+                        )
                         episodes_finished += 1
                         pbar.update(1)
 
-                        episode_images.append(frames_per_env[i])
-                        frames_per_env[i] = []
+                        episode_images.append(frames_per_env[done_idx])
+                        frames_per_env[done_idx] = []
 
                     episode_return[done] = 0.0
         pbar.close()
@@ -81,4 +89,4 @@ class Evaluator:
         # n_envs, F, H, W, C
         episode_frames = [np.stack(episode) for episode in episode_images]
 
-        return np.mean(total_returns).item(), episode_frames
+        return np.mean(total_returns).item() * 100, episode_frames

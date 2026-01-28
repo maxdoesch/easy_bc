@@ -7,6 +7,10 @@ from flax import nnx
 
 
 class BasePolicy(nnx.Module, abc.ABC):
+    def __init__(self):
+        super().__init__()
+        self.n_action_steps = 8
+
     @abc.abstractmethod
     def compute_loss(
         self, batch: Dict[str, jnp.ndarray], rng: Optional[chex.PRNGKey] = None

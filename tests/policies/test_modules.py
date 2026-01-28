@@ -11,6 +11,7 @@ from easy_bc.policies.modules import (
     EncoderStem,
     RGBEncoder,
     SinusoidalPosEmb,
+    SpatialSoftmax,
 )
 
 
@@ -285,6 +286,45 @@ def test_encoder_block_rejects_mismatched_channels(rngs):
     x = jnp.zeros((1, 32, 32, 15), dtype=jnp.float32)
     with pytest.raises(Exception):
         block(x)
+
+
+@pytest.mark.parametrize(
+    "B,H,W,C,num_keypoints",
+    [
+        (2, 32, 32, 3, 8),
+        (1, 63, 65, 3, 16),
+        (4, 128, 96, 3, 8),
+    ],
+)
+def test_spatial_softmax_forward(B, H, W, C, num_keypoints, rngs):
+    model = SpatialSoftmax(
+        input_shape=(H, W, C),
+        num_keypoints=num_keypoints,
+        rngs=rngs,
+    )
+
+    x = jax.random.normal(jax.random.PRNGKey(0), (B, H, W, C), dtype=jnp.float32)
+    y = model(x)
+
+    assert y.shape == (B, num_keypoints * 2)
+    assert y.dtype == x.dtype
+    assert jnp.isfinite(y).all()
+
+    assert jnp.all(y >= -1.0001)
+    assert jnp.all(y <= 1.0001)
+
+
+def test_spatial_softmax_jittable(rngs):
+    B, H, W, C, num_keypoints = 2, 32, 32, 3, 8
+    model = SpatialSoftmax(
+        input_shape=(H, W, C),
+        num_keypoints=num_keypoints,
+        rngs=rngs,
+    )
+
+    x = jax.random.normal(jax.random.PRNGKey(1), (B, H, W, C), dtype=jnp.float32)
+
+    _jit_parity(model, (x,), rtol=1e-4, atol=1e-5)
 
 
 @pytest.mark.parametrize(

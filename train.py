@@ -205,7 +205,11 @@ def main(cfg: TrainConfig):
                 if i % cfg.log_freq == 0 or i == cfg.train_steps - 1:
                     wandb.log({"train/loss": loss}, step=i)
 
-                if evaluator and (i % cfg.eval_freq == 0 and i > 0):
+                if (
+                    evaluator
+                    and i > 0
+                    and (i % cfg.eval_freq == 0 or i == cfg.train_steps - 1)
+                ):
                     policy.eval()
                     total_returns, episode_frames = evaluator.evaluate(
                         policy=policy,
