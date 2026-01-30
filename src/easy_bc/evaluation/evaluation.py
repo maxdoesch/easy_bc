@@ -59,7 +59,9 @@ class Evaluator:
             eval_rng, step_rng = jax.random.split(eval_rng)
 
             observation = preprocessor(obs)
-            observation = jax.tree_util.tree_map(jnp.asarray, observation)
+            observation = jax.tree_util.tree_map(
+                jax.device_put(jnp.asarray), observation
+            )
 
             action = jit_sample_action(observation, rng=step_rng)
             action = torch.tensor(np.array(action), device="cpu")
@@ -75,8 +77,19 @@ class Evaluator:
 
                 current_sum_rewards += reward
                 current_max_rewards = np.maximum(current_max_rewards, reward)
-                is_success = info.get(
-                    "is_success", np.array([False] * self.envs.num_envs)
+
+                final_info = info.get("final_info")
+                if final_info is not None and not isinstance(final_info, dict):
+                    raise RuntimeError(
+                        "Unsupported `final_info` format: \
+                        expected dict (Gymnasium >= 1.0). "
+                    )
+
+                is_success = np.asarray(
+                    (final_info or {}).get(
+                        "is_success", np.zeros(self.envs.num_envs, dtype=bool)
+                    ),
+                    dtype=bool,
                 )
 
                 done = terminated | truncated
