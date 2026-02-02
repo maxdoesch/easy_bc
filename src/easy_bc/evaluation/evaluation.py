@@ -60,7 +60,8 @@ class Evaluator:
 
             observation = preprocessor(obs)
             observation = jax.tree_util.tree_map(
-                jax.device_put(jnp.asarray), observation
+                lambda x: jax.device_put(jnp.asarray(x)),
+                observation,
             )
 
             action = jit_sample_action(observation, rng=step_rng)

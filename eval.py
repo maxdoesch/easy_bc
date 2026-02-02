@@ -48,7 +48,9 @@ def main(cfg: EvalCfg):
     evaluator = Evaluator(envs=eval_envs, cfg=cfg.evaluator)
 
     # TODO: save and load policy_config
-    policy_config = make_policy_config(cfg.policy, env_cfg=env_cfg, device="cuda")
+    policy_config = make_policy_config(
+        cfg.policy, pretrained_path=cfg.checkpoint_path, device="cuda"
+    )
     policy = make_policy(policy_config, rngs=policy_rngs)
 
     checkpoint_dir = Path(os.path.abspath(cfg.checkpoint_path))
@@ -97,14 +99,15 @@ def main(cfg: EvalCfg):
 
     video_dir = Path("eval_videos")
     video_dir.mkdir(parents=True, exist_ok=True)
-    video_path = video_dir / f"eval_{cfg.checkpoint}.mp4"
-    write_video_spawn(video_path, video_frames[0], fps=env_cfg.fps)
+    for i in range(len(video_frames)):
+        video_path = video_dir / f"eval_{cfg.checkpoint}_{i}.mp4"
+        write_video_spawn(video_path, video_frames[i], fps=env_cfg.fps)
 
     print(f"Eval results at checkpoint {cfg.checkpoint}:")
     print(f"  Average Sum Reward: {sum_rewards}")
     print(f"  Average Max Reward: {max_rewards}")
     print(f"  Success Rate: {successes}")
-    print(f"  Evaluation video saved at: {video_path}")
+    print(f"  Evaluation video saved at: {video_dir}")
 
 
 if __name__ == "__main__":

@@ -38,7 +38,6 @@ class FlowUnetPolicy(BasePolicy):
             rngs=rngs,
         )
 
-        # TODO: support env state features
         self.unet = ConditionalUnet1D(
             feature_dim=self.config.latent_dim,
             cond_dim=state_dim

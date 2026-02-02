@@ -130,6 +130,9 @@ def main(cfg: TrainConfig):
     )
     policy = make_policy(policy_config, rngs=policy_rngs)
 
+    num_params = sum(x.size for x in jax.tree_util.tree_leaves(nnx.state(policy)))
+    print(f"Number of parameters: {num_params / 1e6:.2f}M")
+
     if dataset_metadata.stats:
         preprocessor, postprocessor = make_pre_post_processors(
             policy_config, dataset_metadata.stats
@@ -183,6 +186,9 @@ def main(cfg: TrainConfig):
     # save dataset stats
     write_stats(dataset_metadata.stats, ckpt_dir)  # pyright: ignore
 
+    # save policy config
+    policy_config.save_pretrained(ckpt_dir)
+
     options = ocp.CheckpointManagerOptions(
         save_interval_steps=cfg.checkpoint_freq,
         create=True,
@@ -203,11 +209,13 @@ def main(cfg: TrainConfig):
 
             train_rng, step_rng = jax.random.split(train_rng)
 
-            # TODO: jax.block_until_ready to avoid profiling warning
             loss = train_step(policy, batch, optimizer, step_rng)
 
             if i % cfg.log_freq == 0 or i == cfg.train_steps - 1:
-                wandb.log({"train/loss": loss}, step=i)
+                loss_val = float(jax.block_until_ready(loss))
+                wandb.log({"train/loss": loss_val}, step=i)
+
+                pbar.set_postfix(loss=f"{loss_val:.4f}")
 
             if (
                 evaluator
@@ -249,7 +257,6 @@ def main(cfg: TrainConfig):
                 )
 
             i += 1
-            pbar.set_postfix(loss=f"{float(loss):.4f}")
             pbar.update(1)
 
             policy_gd, policy_state = nnx.split(policy)

@@ -26,12 +26,15 @@ def make_policy_config(
     name: str,
     dataset_metadata: Optional[LeRobotDatasetMetadata] = None,
     env_cfg: Optional[EnvConfig] = None,
+    pretrained_path: Optional[str] = None,
     **kwargs: Any,
 ) -> PreTrainedConfig:
     if dataset_metadata:
         features = dataset_to_policy_features(dataset_metadata.features)
     elif env_cfg:
         features = env_to_policy_features(env_cfg)
+    elif pretrained_path:
+        return PreTrainedConfig.from_pretrained(pretrained_path)
     else:
         raise ValueError("Either dataset_metadata or env_cfg must be provided.")
 

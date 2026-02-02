@@ -43,14 +43,14 @@ class FlowUnetConfig(PreTrainedConfig):
     horizon: int = 16
 
     # RGBEncoder
-    img_feature_dim: int = 256
+    img_feature_dim: int = 512
 
-    time_embedding_dim: int = 64
+    time_embedding_dim: int = 128
 
     latent_dim: int = 64
 
     # Unet.
-    down_dims: tuple[int, ...] = (64, 128, 256)
+    down_dims: tuple[int, ...] = (128, 256, 512)
     kernel_size: int = 5
     n_groups: int = 8
 
