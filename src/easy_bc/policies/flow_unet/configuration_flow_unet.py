@@ -35,17 +35,19 @@ class FlowUnetConfig(PreTrainedConfig):
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.MEAN_STD,
-            "STATE": NormalizationMode.MIN_MAX,
+            "STATE": NormalizationMode.MEAN_STD,
             "ACTION": NormalizationMode.MEAN_STD,
         }
     )
 
+    crop_shape: tuple[int, int] | None = (84, 84)
+
     horizon: int = 16
 
     # RGBEncoder
-    img_feature_dim: int = 512
+    img_feature_dim: int = 64
 
-    time_embedding_dim: int = 128
+    time_embedding_dim: int = 64
 
     latent_dim: int = 64
 

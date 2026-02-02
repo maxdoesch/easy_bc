@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 import chex
 import jax
@@ -18,6 +18,45 @@ from easy_bc.policies.modules import (
 from easy_bc.policies.policy import BasePolicy
 
 
+def crop_image(
+    x: jnp.ndarray,
+    *,
+    shape: Tuple[int, int],
+    random: bool = False,
+    rng: Optional[jax.Array] = None,
+) -> jnp.ndarray:
+    """Center or random crop. x: (C,H,W) or (B,C,H,W)."""
+    ch, cw = shape
+    x = jnp.asarray(x)
+
+    if x.ndim == 3:
+        x = x[None]
+        squeeze = True
+    elif x.ndim == 4:
+        squeeze = False
+    else:
+        raise ValueError(f"Invalid shape {x.shape}")
+
+    B, C, H, W = x.shape
+    max_y, max_x = H - ch, W - cw
+
+    if random:
+        if rng is None:
+            raise ValueError("rng required for random crop")
+        ry, rx = jax.random.split(rng)
+        y0 = jax.random.randint(ry, (B,), 0, max_y + 1)
+        x0 = jax.random.randint(rx, (B,), 0, max_x + 1)
+    else:
+        y0 = jnp.full((B,), max_y // 2)
+        x0 = jnp.full((B,), max_x // 2)
+
+    def crop(img, y, x):
+        return jax.lax.dynamic_slice(img, (0, y, x), (C, ch, cw))
+
+    out = jax.vmap(crop)(x, y0, x0)
+    return out[0] if squeeze else out
+
+
 class FlowUnetPolicy(BasePolicy):
     """FlowUnet policy model."""
 
@@ -28,6 +67,8 @@ class FlowUnetPolicy(BasePolicy):
 
         action_dim = next(iter(self.config.output_features.values())).shape[0]
         images_shape = next(iter(config.image_features.values())).shape  # C, H, W
+        if config.crop_shape:
+            images_shape = (images_shape[0], *config.crop_shape)  # C, H_crop, W_crop
         state_dim = (
             config.robot_state_feature.shape[0] if config.robot_state_feature else 0
         )
@@ -122,6 +163,14 @@ class FlowUnetPolicy(BasePolicy):
         img_key = next(iter(self.config.image_features.keys()))
         img = batch[img_key]  # B, C, H, W
 
+        if self.config.crop_shape:
+            img = crop_image(
+                img,
+                shape=self.config.crop_shape,
+                random=True,
+                rng=noise_rng,
+            )  # B, C, H_crop, W_crop
+
         state = batch[OBS_STATE]
 
         actions = batch[ACTION]  # B, H, action_dim
@@ -159,6 +208,13 @@ class FlowUnetPolicy(BasePolicy):
     ) -> jnp.ndarray:
         img_key = next(iter(self.config.image_features.keys()))
         img = batch[img_key]  # B, C, H, W
+
+        if self.config.crop_shape:
+            img = crop_image(
+                img,
+                shape=self.config.crop_shape,
+                random=False,
+            )  # B, C, H_crop, W_crop
 
         state = batch[OBS_STATE]
 
