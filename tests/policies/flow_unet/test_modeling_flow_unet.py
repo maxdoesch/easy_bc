@@ -54,6 +54,7 @@ def flow_unet_config(dataset_metadata) -> FlowUnetConfig:
     return FlowUnetConfig(
         input_features=input_features,
         output_features=output_features,
+        crop_shape=(84, 84),
         img_feature_dim=32,
         latent_dim=64,
         time_embedding_dim=128,
@@ -94,8 +95,6 @@ def batch(flow_unet_config: FlowUnetConfig, dataset) -> dict:
 def test_flow_unet_policy_compute_loss(policy: FlowUnetPolicy, batch: dict):
     action_key = next(iter(policy.config.output_features.keys()))
     action = batch[action_key]
-
-    print(action.shape)
 
     B, H, _ = action.shape
 

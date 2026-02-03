@@ -7,30 +7,7 @@ from lerobot.configs.types import NormalizationMode
 @PreTrainedConfig.register_subclass("flow_unet")
 @dataclass
 class FlowUnetConfig(PreTrainedConfig):
-    """Configuration class for FlowUnetPolicy.
-
-    Defaults are configured for training with PushT providing proprioceptive and single camera observations.
-
-    The parameters you will most likely need to change are the ones which depend on the environment / sensors.
-    Those are: `input_shapes` and `output_shapes`.
-
-    Notes on the inputs and outputs:
-        - "observation.state" is required as an input key.
-        - Either:
-            - At least one key starting with "observation.image is required as an input.
-              AND/OR
-            - The key "observation.environment_state" is required as input.
-        - If there are multiple keys beginning with "observation.image" they are treated as multiple camera
-          views. Right now we only support all images having the same shape.
-        - "action" is required as an output key.
-
-    Args:
-        down_dims: Feature dimension for each stage of temporal downsampling in the flow unet modeling Unet.
-            You may provide a variable number of dimensions, therefore also controlling the degree of
-            downsampling.
-        kernel_size: The convolutional kernel size of the flow unet modeling Unet.
-        n_groups: Number of groups used in the group norm of the Unet's convolutional blocks.
-    """
+    """Configuration class for FlowUnetPolicy."""
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -40,7 +17,7 @@ class FlowUnetConfig(PreTrainedConfig):
         }
     )
 
-    crop_shape: tuple[int, int] | None = (84, 84)
+    crop_shape: tuple[int, int] | None = (224, 224)
 
     horizon: int = 16
 
@@ -48,7 +25,6 @@ class FlowUnetConfig(PreTrainedConfig):
     img_feature_dim: int = 64
 
     time_embedding_dim: int = 64
-
     latent_dim: int = 64
 
     # Unet.

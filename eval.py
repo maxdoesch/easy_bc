@@ -47,7 +47,6 @@ def main(cfg: EvalCfg):
 
     evaluator = Evaluator(envs=eval_envs, cfg=cfg.evaluator)
 
-    # TODO: save and load policy_config
     policy_config = make_policy_config(
         cfg.policy, pretrained_path=cfg.checkpoint_path, device="cuda"
     )

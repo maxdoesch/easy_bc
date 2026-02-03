@@ -9,7 +9,6 @@ except Exception:
     pass
 
 import dataclasses
-import itertools
 import multiprocessing as mp
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,8 +23,9 @@ import numpy as np
 import optax
 import orbax.checkpoint as ocp
 import tyro
-from lerobot.datasets.factory import resolve_delta_timestamps
+from lerobot.datasets.factory import ImageTransforms, resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.datasets.transforms import ImageTransformsConfig
 from lerobot.datasets.utils import write_stats
 from lerobot.envs.factory import make_env, make_env_config
 from lerobot.envs.utils import preprocess_observation
@@ -50,6 +50,10 @@ class TrainConfig:
     policy: str = tyro.MISSING
 
     repo_id: str = tyro.MISSING
+    image_transforms: ImageTransformsConfig = field(
+        default_factory=ImageTransformsConfig
+    )
+
     train_steps: int = 10_000
     log_freq: int = 100
     eval_freq: int = 5_000
@@ -142,6 +146,9 @@ def main(cfg: TrainConfig):
 
     dataset = LeRobotDataset(
         repo_id=cfg.repo_id,
+        image_transforms=ImageTransforms(cfg.image_transforms)
+        if cfg.image_transforms.enable
+        else None,
         delta_timestamps=resolve_delta_timestamps(policy_config, dataset_metadata),
     )
 
@@ -197,79 +204,83 @@ def main(cfg: TrainConfig):
     i = 0
     pbar = tqdm(total=cfg.train_steps, desc="Training")
     with ocp.CheckpointManager(str(ckpt_dir), options=options) as mngr:
-        for i, batch in zip(range(cfg.train_steps), itertools.cycle(dataloader)):
-            batch = preprocessor(batch)
-            keep_keys = set(policy_config.input_features) | set(
-                policy_config.output_features
-            )
-            filtered = {k: v for k, v in batch.items() if k in keep_keys}
-            batch = jax.tree_util.tree_map(
-                lambda x: jax.device_put(jnp.asarray(x)), filtered
-            )
-
-            train_rng, step_rng = jax.random.split(train_rng)
-
-            loss = train_step(policy, batch, optimizer, step_rng)
-
-            if i % cfg.log_freq == 0 or i == cfg.train_steps - 1:
-                loss_val = float(jax.block_until_ready(loss))
-                wandb.log({"train/loss": loss_val}, step=i)
-
-                pbar.set_postfix(loss=f"{loss_val:.4f}")
-
-            if (
-                evaluator
-                and i > 0
-                and (i % cfg.eval_freq == 0 or i == cfg.train_steps - 1)
-            ):
-                policy.eval()
-                eval_metrics = evaluator.evaluate(
-                    policy=policy,
-                    preprocessor=lambda x: preprocessor(preprocess_observation(x)),
-                    postprocessor=postprocessor,
-                    eval_rng=eval_rng,
+        while i < cfg.train_steps:
+            for batch in dataloader:
+                batch = preprocessor(batch)
+                keep_keys = set(policy_config.input_features) | set(
+                    policy_config.output_features
                 )
-                policy.train()
-
-                wandb.log(
-                    {
-                        "eval/sum_reward": np.mean(eval_metrics["sum_rewards"]),
-                        "eval/max_reward": np.mean(eval_metrics["max_rewards"]),
-                        "eval/success_rate": np.mean(eval_metrics["successes"]),
-                    },
-                    step=i,
+                filtered = {k: v for k, v in batch.items() if k in keep_keys}
+                batch = jax.tree_util.tree_map(
+                    lambda x: jax.device_put(jnp.asarray(x)), filtered
                 )
 
-                video_dir = ckpt_dir / "videos"
-                video_dir.mkdir(parents=True, exist_ok=True)
-                video_path = video_dir / f"eval_{i:08d}.mp4"
-                write_video_spawn(
-                    video_path, eval_metrics["video_frames"][0], fps=env_cfg.fps
+                train_rng, step_rng = jax.random.split(train_rng)
+
+                loss = train_step(policy, batch, optimizer, step_rng)
+
+                if i % cfg.log_freq == 0 or i == cfg.train_steps - 1:
+                    loss_val = float(jax.block_until_ready(loss))
+                    wandb.log({"train/loss": loss_val}, step=i)
+
+                    pbar.set_postfix(loss=f"{loss_val:.4f}")
+
+                if (
+                    evaluator
+                    and i > 0
+                    and (i % cfg.eval_freq == 0 or i == cfg.train_steps - 1)
+                ):
+                    policy.eval()
+                    eval_metrics = evaluator.evaluate(
+                        policy=policy,
+                        preprocessor=lambda x: preprocessor(preprocess_observation(x)),
+                        postprocessor=postprocessor,
+                        eval_rng=eval_rng,
+                    )
+                    policy.train()
+
+                    wandb.log(
+                        {
+                            "eval/sum_reward": np.mean(eval_metrics["sum_rewards"]),
+                            "eval/max_reward": np.mean(eval_metrics["max_rewards"]),
+                            "eval/success_rate": np.mean(eval_metrics["successes"]),
+                        },
+                        step=i,
+                    )
+
+                    video_dir = ckpt_dir / "videos"
+                    video_dir.mkdir(parents=True, exist_ok=True)
+                    video_path = video_dir / f"eval_{i:08d}.mp4"
+                    write_video_spawn(
+                        video_path, eval_metrics["video_frames"][0], fps=env_cfg.fps
+                    )
+                    wandb.log(
+                        {
+                            "eval/video": wandb.Video(
+                                str(video_path),
+                                format="mp4",
+                            )
+                        },
+                        step=i,
+                    )
+
+                i += 1
+                pbar.update(1)
+
+                policy_gd, policy_state = nnx.split(policy)
+                opt_gd, opt_state = nnx.split(optimizer)
+
+                mngr.save(
+                    i,
+                    args=ocp.args.Composite(
+                        policy=ocp.args.StandardSave(policy_state),  # pyright: ignore
+                        optimizer=ocp.args.StandardSave(opt_state),  # pyright: ignore
+                        step=ocp.args.JsonSave(i),  # pyright: ignore
+                    ),
                 )
-                wandb.log(
-                    {
-                        "eval/video": wandb.Video(
-                            str(video_path),
-                            format="mp4",
-                        )
-                    },
-                    step=i,
-                )
 
-            i += 1
-            pbar.update(1)
-
-            policy_gd, policy_state = nnx.split(policy)
-            opt_gd, opt_state = nnx.split(optimizer)
-
-            mngr.save(
-                i,
-                args=ocp.args.Composite(
-                    policy=ocp.args.StandardSave(policy_state),  # pyright: ignore
-                    optimizer=ocp.args.StandardSave(opt_state),  # pyright: ignore
-                    step=ocp.args.JsonSave(i),  # pyright: ignore
-                ),
-            )
+                if i >= cfg.train_steps:
+                    break
 
 
 if __name__ == "__main__":

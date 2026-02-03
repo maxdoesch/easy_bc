@@ -1,6 +1,7 @@
 from typing import Dict, Optional, Tuple
 
 import chex
+import einops
 import jax
 import jax.numpy as jnp
 import optax
@@ -23,7 +24,7 @@ def crop_image(
     *,
     shape: Tuple[int, int],
     random: bool = False,
-    rng: Optional[jax.Array] = None,
+    rng: Optional[chex.PRNGKey] = None,
 ) -> jnp.ndarray:
     """Center or random crop. x: (C,H,W) or (B,C,H,W)."""
     ch, cw = shape
@@ -66,9 +67,12 @@ class FlowUnetPolicy(BasePolicy):
         self.config = config
 
         action_dim = next(iter(self.config.output_features.values())).shape[0]
+
+        num_images = len(config.image_features)
         images_shape = next(iter(config.image_features.values())).shape  # C, H, W
         if config.crop_shape:
             images_shape = (images_shape[0], *config.crop_shape)  # C, H_crop, W_crop
+
         state_dim = (
             config.robot_state_feature.shape[0] if config.robot_state_feature else 0
         )
@@ -82,7 +86,7 @@ class FlowUnetPolicy(BasePolicy):
         self.unet = ConditionalUnet1D(
             feature_dim=self.config.latent_dim,
             cond_dim=state_dim
-            + self.config.img_feature_dim
+            + self.config.img_feature_dim * num_images
             + self.config.time_embedding_dim,
             down_dims=self.config.down_dims,
             kernel_size=self.config.kernel_size,
@@ -154,29 +158,46 @@ class FlowUnetPolicy(BasePolicy):
 
         return v_t
 
+    def get_conditional_embedding(
+        self, batch: Dict[str, jnp.ndarray], rng: Optional[chex.PRNGKey] = None
+    ) -> jnp.ndarray:
+        state = batch[OBS_STATE]
+
+        imgs_array = jnp.concatenate(
+            [batch[key] for key in self.config.image_features.keys()],
+            axis=0,
+        )  # B*N, C, H, W
+
+        B = state.shape[0]
+
+        if self.config.crop_shape:
+            imgs_array = crop_image(
+                imgs_array,
+                shape=self.config.crop_shape,
+                random=False if rng is None else True,
+                rng=rng,
+            )  # B*N, C, H_crop, W_crop
+
+        img_feature = self.rgb_encoder(imgs_array)  # B*N, img_feature_dim
+
+        img_feature = einops.rearrange(
+            img_feature, "(b n) f -> b (n f)", b=B
+        )  # B, N*img_feature_dim
+
+        cond = jnp.concatenate(
+            [state, img_feature], axis=-1
+        )  # B, state_dim + N*img_feature_dim
+
+        return cond
+
     @override
     def compute_loss(
         self, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
     ) -> chex.Array:
-        noise_rng, time_rng = jax.random.split(rng, 2)
-
-        img_key = next(iter(self.config.image_features.keys()))
-        img = batch[img_key]  # B, C, H, W
-
-        if self.config.crop_shape:
-            img = crop_image(
-                img,
-                shape=self.config.crop_shape,
-                random=True,
-                rng=noise_rng,
-            )  # B, C, H_crop, W_crop
-
-        state = batch[OBS_STATE]
+        noise_rng, time_rng, crop_rng = jax.random.split(rng, 3)
 
         actions = batch[ACTION]  # B, H, action_dim
-
         B, H, _ = actions.shape
-
         assert H == self.config.horizon
 
         noise = jax.random.normal(
@@ -190,11 +211,7 @@ class FlowUnetPolicy(BasePolicy):
         x_t = time_expanded * noise + (1 - time_expanded) * actions  # B, H, action_dim
         u_t = noise - actions  # B, H, action_dim
 
-        img_feature = self.rgb_encoder(img)  # B, img_feature_dim
-
-        cond = jnp.concatenate(
-            [state, img_feature], axis=-1
-        )  # B, state_dim + img_feature_dim
+        cond = self.get_conditional_embedding(batch, rng=crop_rng)  # B, cond_dim
 
         v_t = self.pred_action_flow(x_t, cond, time)  # B, H, action_dim
 
@@ -206,24 +223,14 @@ class FlowUnetPolicy(BasePolicy):
     def sample_action(
         self, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
     ) -> jnp.ndarray:
-        img_key = next(iter(self.config.image_features.keys()))
-        img = batch[img_key]  # B, C, H, W
-
-        if self.config.crop_shape:
-            img = crop_image(
-                img,
-                shape=self.config.crop_shape,
-                random=False,
-            )  # B, C, H_crop, W_crop
-
-        state = batch[OBS_STATE]
+        cond = self.get_conditional_embedding(batch)  # B, cond_dim
 
         B, H, action_dim = (
-            img.shape[0],
+            cond.shape[0],
             self.config.horizon,
             self.config.action_feature.shape[0],  # pyright: ignore
         )
-        dtype = img.dtype
+        dtype = cond.dtype
 
         dt = 1.0 / self.config.num_inference_steps
 
@@ -232,12 +239,6 @@ class FlowUnetPolicy(BasePolicy):
             (B, H, action_dim),
             dtype=dtype,
         )
-
-        img_feature = self.rgb_encoder(img)  # B, img_feature_dim
-
-        cond = jnp.concatenate(
-            [state, img_feature], axis=-1
-        )  # B, state_dim + img_feature_dim
 
         def step(carry):
             x_t, t = carry
