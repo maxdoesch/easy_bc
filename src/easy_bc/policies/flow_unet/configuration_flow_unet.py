@@ -17,7 +17,8 @@ class FlowUnetConfig(PreTrainedConfig):
         }
     )
 
-    crop_shape: tuple[int, int] | None = (224, 224)
+    image_resolution: tuple[int, int] | None = (224, 224)
+    crop_shape: tuple[int, int] | None = None
 
     horizon: int = 16
 

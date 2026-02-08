@@ -54,6 +54,7 @@ def flow_unet_config(dataset_metadata) -> FlowUnetConfig:
     return FlowUnetConfig(
         input_features=input_features,
         output_features=output_features,
+        image_resolution=(90, 90),
         crop_shape=(84, 84),
         img_feature_dim=32,
         latent_dim=64,

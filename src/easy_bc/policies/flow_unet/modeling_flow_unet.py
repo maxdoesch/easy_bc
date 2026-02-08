@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import chex
 import einops
@@ -17,45 +17,7 @@ from easy_bc.policies.modules import (
     SinusoidalPosEmb,
 )
 from easy_bc.policies.policy import BasePolicy
-
-
-def crop_image(
-    x: jnp.ndarray,
-    *,
-    shape: Tuple[int, int],
-    random: bool = False,
-    rng: Optional[chex.PRNGKey] = None,
-) -> jnp.ndarray:
-    """Center or random crop. x: (C,H,W) or (B,C,H,W)."""
-    ch, cw = shape
-    x = jnp.asarray(x)
-
-    if x.ndim == 3:
-        x = x[None]
-        squeeze = True
-    elif x.ndim == 4:
-        squeeze = False
-    else:
-        raise ValueError(f"Invalid shape {x.shape}")
-
-    B, C, H, W = x.shape
-    max_y, max_x = H - ch, W - cw
-
-    if random:
-        if rng is None:
-            raise ValueError("rng required for random crop")
-        ry, rx = jax.random.split(rng)
-        y0 = jax.random.randint(ry, (B,), 0, max_y + 1)
-        x0 = jax.random.randint(rx, (B,), 0, max_x + 1)
-    else:
-        y0 = jnp.full((B,), max_y // 2)
-        x0 = jnp.full((B,), max_x // 2)
-
-    def crop(img, y, x):
-        return jax.lax.dynamic_slice(img, (0, y, x), (C, ch, cw))
-
-    out = jax.vmap(crop)(x, y0, x0)
-    return out[0] if squeeze else out
+from easy_bc.policies.utils import crop_image, resize_with_pad
 
 
 class FlowUnetPolicy(BasePolicy):
@@ -70,6 +32,12 @@ class FlowUnetPolicy(BasePolicy):
 
         num_images = len(config.image_features)
         images_shape = next(iter(config.image_features.values())).shape  # C, H, W
+        if config.image_resolution:
+            images_shape = (
+                images_shape[0],
+                config.image_resolution[0],
+                config.image_resolution[1],
+            )  # C, H_resized, W_resized
         if config.crop_shape:
             images_shape = (images_shape[0], *config.crop_shape)  # C, H_crop, W_crop
 
@@ -169,6 +137,12 @@ class FlowUnetPolicy(BasePolicy):
         )  # B*N, C, H, W
 
         B = state.shape[0]
+
+        if self.config.image_resolution:
+            imgs_array = resize_with_pad(
+                imgs_array,
+                shape=self.config.image_resolution,
+            )  # B*N, C, H_resized, W_resized
 
         if self.config.crop_shape:
             imgs_array = crop_image(
