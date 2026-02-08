@@ -66,6 +66,7 @@ class TrainConfig:
     seed: int = 42
 
     env_id: Optional[str] = None
+    env_kwargs: Dict = field(default_factory=dict)
     num_envs: int = 1
     evaluator: EvaluatorConfig = field(default_factory=lambda: EvaluatorConfig())
 
@@ -165,7 +166,7 @@ def main(cfg: TrainConfig):
 
     evaluator = None
     if cfg.env_id:
-        env_cfg = make_env_config(cfg.env_id)
+        env_cfg = make_env_config(cfg.env_id, **cfg.env_kwargs)
         eval_envs_dict = make_env(env_cfg, n_envs=cfg.num_envs)
 
         suite_name = next(iter(eval_envs_dict))
