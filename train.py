@@ -13,7 +13,7 @@ import multiprocessing as mp
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 import chex
 import flax.nnx as nnx
@@ -27,8 +27,6 @@ from lerobot.datasets.factory import ImageTransforms, resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.transforms import ImageTransformsConfig
 from lerobot.datasets.utils import write_stats
-from lerobot.envs.factory import make_env, make_env_config
-from lerobot.envs.utils import preprocess_observation
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -65,9 +63,6 @@ class TrainConfig:
 
     seed: int = 42
 
-    env_id: Optional[str] = None
-    env_kwargs: Dict = field(default_factory=dict)
-    num_envs: int = 1
     evaluator: EvaluatorConfig = field(default_factory=lambda: EvaluatorConfig())
 
     wandb_enabled: bool = True
@@ -139,7 +134,7 @@ def main(cfg: TrainConfig):
     print(f"Number of parameters: {num_params / 1e6:.2f}M")
 
     if dataset_metadata.stats:
-        preprocessor, postprocessor = make_pre_post_processors(
+        policy_preprocessor, policy_postprocessor = make_pre_post_processors(
             policy_config, dataset_metadata.stats
         )
     else:
@@ -164,15 +159,7 @@ def main(cfg: TrainConfig):
         pin_memory=True,
     )
 
-    evaluator = None
-    if cfg.env_id:
-        env_cfg = make_env_config(cfg.env_id, **cfg.env_kwargs)
-        eval_envs_dict = make_env(env_cfg, n_envs=cfg.num_envs)
-
-        suite_name = next(iter(eval_envs_dict))
-        eval_envs = eval_envs_dict[suite_name][0]
-
-        evaluator = Evaluator(envs=eval_envs, cfg=cfg.evaluator)
+    evaluator = Evaluator(cfg=cfg.evaluator, policy_cfg=policy_config)
 
     scheduler = optax.cosine_decay_schedule(
         init_value=1e-4, decay_steps=cfg.train_steps, alpha=1e-1
@@ -207,10 +194,17 @@ def main(cfg: TrainConfig):
     with ocp.CheckpointManager(str(ckpt_dir), options=options) as mngr:
         while i < cfg.train_steps:
             for batch in dataloader:
-                batch = preprocessor(batch)
-                keep_keys = set(policy_config.input_features) | set(
-                    policy_config.output_features
-                )
+                batch = policy_preprocessor(batch)
+
+                if policy_config.input_features and policy_config.output_features:
+                    keep_keys = set(policy_config.input_features.keys()) | set(
+                        policy_config.output_features.keys()
+                    )
+                else:
+                    raise ValueError(
+                        "Policy config must have input and output features defined."
+                    )
+
                 filtered = {k: v for k, v in batch.items() if k in keep_keys}
                 batch = jax.tree_util.tree_map(
                     lambda x: jax.device_put(jnp.asarray(x)), filtered
@@ -226,44 +220,43 @@ def main(cfg: TrainConfig):
 
                     pbar.set_postfix(loss=f"{loss_val:.4f}")
 
-                if (
-                    evaluator
-                    and i > 0
-                    and (i % cfg.eval_freq == 0 or i == cfg.train_steps - 1)
-                ):
+                if i > 0 and (i % cfg.eval_freq == 0 or i == cfg.train_steps - 1):
                     policy.eval()
                     eval_metrics = evaluator.evaluate(
                         policy=policy,
-                        preprocessor=lambda x: preprocessor(preprocess_observation(x)),
-                        postprocessor=postprocessor,
+                        policy_preprocessor=policy_preprocessor,
+                        policy_postprocessor=policy_postprocessor,
                         eval_rng=eval_rng,
                     )
                     policy.train()
 
-                    wandb.log(
-                        {
-                            "eval/sum_reward": np.mean(eval_metrics["sum_rewards"]),
-                            "eval/max_reward": np.mean(eval_metrics["max_rewards"]),
-                            "eval/success_rate": np.mean(eval_metrics["successes"]),
-                        },
-                        step=i,
-                    )
+                    if eval_metrics:
+                        wandb.log(
+                            {
+                                "eval/sum_reward": np.mean(eval_metrics["sum_rewards"]),
+                                "eval/max_reward": np.mean(eval_metrics["max_rewards"]),
+                                "eval/success_rate": np.mean(eval_metrics["successes"]),
+                            },
+                            step=i,
+                        )
 
-                    video_dir = ckpt_dir / "videos"
-                    video_dir.mkdir(parents=True, exist_ok=True)
-                    video_path = video_dir / f"eval_{i:08d}.mp4"
-                    write_video_spawn(
-                        video_path, eval_metrics["video_frames"][0], fps=env_cfg.fps
-                    )
-                    wandb.log(
-                        {
-                            "eval/video": wandb.Video(
-                                str(video_path),
-                                format="mp4",
-                            )
-                        },
-                        step=i,
-                    )
+                        video_dir = ckpt_dir / "videos"
+                        video_dir.mkdir(parents=True, exist_ok=True)
+                        video_path = video_dir / f"eval_{i:08d}.mp4"
+                        write_video_spawn(
+                            video_path,
+                            eval_metrics["video_frames"][0],
+                            fps=evaluator.fps,
+                        )
+                        wandb.log(
+                            {
+                                "eval/video": wandb.Video(
+                                    str(video_path),
+                                    format="mp4",
+                                )
+                            },
+                            step=i,
+                        )
 
                 i += 1
                 pbar.update(1)
@@ -282,6 +275,7 @@ def main(cfg: TrainConfig):
 
                 if i >= cfg.train_steps:
                     break
+    evaluator.close()
 
 
 if __name__ == "__main__":

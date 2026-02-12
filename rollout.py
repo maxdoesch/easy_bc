@@ -15,7 +15,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 from lerobot.datasets.utils import load_stats
 from lerobot.policies.utils import build_inference_frame, make_robot_action
 from lerobot.robots import make_robot_from_config
-from lerobot.robots.so101_follower import SO101FollowerConfig
+from lerobot.robots.so_follower.so_follower import SOFollowerRobotConfig
 
 from easy_bc.policies.factory import (
     make_policy,
@@ -54,7 +54,7 @@ def main(cfg: RolloutCfg):
         ),
     }
 
-    robot_config = SO101FollowerConfig(
+    robot_config = SOFollowerRobotConfig(
         cfg.robot_port,
         id="so101_follower_arm",
         cameras=camera_config,  # pyright: ignore

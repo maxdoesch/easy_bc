@@ -8,8 +8,6 @@ import orbax.checkpoint as ocp
 import tyro
 from flax import nnx
 from lerobot.datasets.utils import load_stats
-from lerobot.envs.factory import make_env, make_env_config
-from lerobot.envs.utils import preprocess_observation
 
 from easy_bc.evaluation.evaluation import Evaluator, EvaluatorConfig
 from easy_bc.policies.factory import (
@@ -25,8 +23,6 @@ class EvalCfg:
     checkpoint_path: str
     checkpoint: int
 
-    env_id: str = tyro.MISSING
-    num_envs: int = 1
     evaluator: EvaluatorConfig = field(default_factory=lambda: EvaluatorConfig())
 
     policy: str = tyro.MISSING
@@ -39,14 +35,6 @@ def main(cfg: EvalCfg):
     policy_rngs = nnx.Rngs(jax.random.fold_in(init_rng, 0))
     eval_rng = jax.random.fold_in(init_rng, 1)
 
-    env_cfg = make_env_config(cfg.env_id)
-    eval_envs_dict = make_env(env_cfg, n_envs=cfg.num_envs)
-
-    suite_name = next(iter(eval_envs_dict))
-    eval_envs = eval_envs_dict[suite_name][0]
-
-    evaluator = Evaluator(envs=eval_envs, cfg=cfg.evaluator)
-
     policy_config = make_policy_config(
         cfg.policy, pretrained_path=cfg.checkpoint_path, device="cuda"
     )
@@ -56,13 +44,15 @@ def main(cfg: EvalCfg):
     dataset_stats = load_stats(checkpoint_dir)
 
     if dataset_stats:
-        preprocessor, postprocessor = make_pre_post_processors(
+        policy_preprocessor, policy_postprocessor = make_pre_post_processors(
             policy_config, dataset_stats
         )
     else:
         raise ValueError(
             "Dataset stats are required for preprocessing and postprocessing."
         )
+
+    evaluator = Evaluator(cfg=cfg.evaluator, policy_cfg=policy_config)
 
     policy_gd, policy_state = nnx.split(policy)
 
@@ -84,12 +74,12 @@ def main(cfg: EvalCfg):
 
     eval_metrics = evaluator.evaluate(
         policy=policy,
-        preprocessor=lambda x: preprocessor(preprocess_observation(x)),
-        postprocessor=postprocessor,
+        policy_preprocessor=policy_preprocessor,
+        policy_postprocessor=policy_postprocessor,
         eval_rng=eval_rng,
     )
 
-    eval_envs.close()
+    evaluator.close()
 
     sum_rewards = np.mean(eval_metrics["sum_rewards"], axis=0)
     max_rewards = np.mean(eval_metrics["max_rewards"], axis=0)
@@ -100,7 +90,7 @@ def main(cfg: EvalCfg):
     video_dir.mkdir(parents=True, exist_ok=True)
     for i in range(len(video_frames)):
         video_path = video_dir / f"eval_{cfg.checkpoint}_{i}.mp4"
-        write_video_spawn(video_path, video_frames[i], fps=env_cfg.fps)
+        write_video_spawn(video_path, video_frames[i], fps=evaluator.fps)
 
     print(f"Eval results at checkpoint {cfg.checkpoint}:")
     print(f"  Average Sum Reward: {sum_rewards}")
