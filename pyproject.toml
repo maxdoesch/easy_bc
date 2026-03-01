@@ -44,6 +44,9 @@ reportUnusedCallResult = "none"
 dev = [
     "pytest>=9.0.1",
 ]
+equimo = [
+    "equimo>=0.4.7",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

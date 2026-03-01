@@ -11,7 +11,7 @@ class FlowUnetConfig(PreTrainedConfig):
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
-            "VISUAL": NormalizationMode.MEAN_STD,
+            "VISUAL": NormalizationMode.IDENTITY,
             "STATE": NormalizationMode.MEAN_STD,
             "ACTION": NormalizationMode.MEAN_STD,
         }
@@ -23,6 +23,7 @@ class FlowUnetConfig(PreTrainedConfig):
     horizon: int = 16
 
     # RGBEncoder
+    dino_encoder: bool = False
     img_feature_dim: int = 64
 
     time_embedding_dim: int = 64

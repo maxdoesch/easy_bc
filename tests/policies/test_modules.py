@@ -7,6 +7,7 @@ from easy_bc.policies.modules import (
     ConditionalResidual1DBlock,
     ConditionalUnet1D,
     Conv1DBlock,
+    DinoRGBEncoder,
     EncoderBlock,
     EncoderStem,
     RGBEncoder,
@@ -360,3 +361,36 @@ def test_rgb_encoder_wrong_input_channels_raises(rngs):
     x_bad = jnp.zeros((1, 4, 64, 64), dtype=jnp.float32)
     with pytest.raises(Exception):
         enc(x_bad)
+
+
+@pytest.mark.parametrize(
+    "B,H,W,C,out_dim",
+    [
+        (2, 224, 224, 3, 16),
+        (1, 224, 224, 3, 32),
+        (4, 224, 224, 3, 64),
+    ],
+)
+def test_dino_rgb_encoder_forward(B, H, W, C, out_dim, rngs):
+    img_shape = (C, H, W)
+    enc = DinoRGBEncoder(img_shape, out_dim, rngs=rngs)
+
+    x = jax.random.normal(jax.random.PRNGKey(1), (B, C, H, W), dtype=jnp.float32)
+    rng_key = jax.random.PRNGKey(2)
+
+    y = enc(x, rng_key=rng_key)
+
+    assert y.shape == (B, out_dim)
+    assert y.dtype == x.dtype
+    assert jnp.isfinite(y).all()
+
+
+def test_dino_rgb_encoder_jittable(rngs):
+    out_feature_dim = 32
+    image_shape = (3, 224, 224)
+    enc = DinoRGBEncoder(image_shape, out_feature_dim, rngs=rngs)
+
+    x = jax.random.normal(jax.random.PRNGKey(1), (2, *image_shape), dtype=jnp.float32)
+    rng_key = jax.random.PRNGKey(2)
+
+    _jit_parity(enc, (x, rng_key), rtol=1e-4, atol=1e-5)

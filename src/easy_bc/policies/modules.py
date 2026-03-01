@@ -1,6 +1,11 @@
+from math import sqrt
+from typing import Optional, cast
+
 import einops
+import jax
 import jax.numpy as jnp
 from flax import nnx
+from jaxtyping import PRNGKeyArray
 
 
 def get_output_shape(module: nnx.Module, input_shape: tuple) -> tuple:
@@ -365,6 +370,83 @@ class SpatialSoftmax(nnx.Module):
         return feature_keypoints
 
 
+class DinoRGBEncoder(nnx.Module):
+    def __init__(self, images_shape: tuple, out_feature_dim: int, rngs: nnx.Rngs):
+        """
+        images_shape: (C, H, W)
+        out_feature_dim: int, must be even
+        """
+        super().__init__()
+
+        try:
+            from equimo.io import load_model
+            from equimo.models import VisionTransformer
+        except ImportError as e:
+            raise ImportError("DinoRGBEncoder requires equimo.") from e
+
+        dino_model = load_model(
+            "vit", identifier="dinov3_vits16_pretrain_lvd1689m", inference_mode=True
+        )
+
+        # cast to VisionTransforer
+        self.dino_model: VisionTransformer = cast(VisionTransformer, dino_model)
+        self.dino_model = nnx.data(self.dino_model)
+
+        assert out_feature_dim % 2 == 0, "out_feature_dim must be even."
+
+        self.images_shape = images_shape
+        feature_dim = self.dino_model.dim
+        self.patch_hw: int = int(sqrt(self.dino_model.num_patches))
+
+        assert (
+            self.images_shape[1] % self.patch_hw == 0
+            and self.images_shape[2] % self.patch_hw == 0
+        ), f"Image height and width must be divisible by patch size {self.patch_hw}."
+
+        feature_map_shape = (
+            self.patch_hw,
+            self.patch_hw,
+            feature_dim,
+        )
+
+        self.spatial_softmax = SpatialSoftmax(
+            input_shape=feature_map_shape,
+            num_keypoints=out_feature_dim // 2,
+            rngs=rngs,
+        )
+
+        self.head = nnx.Linear(
+            in_features=out_feature_dim,
+            out_features=out_feature_dim,
+            rngs=rngs,
+        )
+
+    def __call__(self, x, rng: PRNGKeyArray):
+        """
+        x: [B, C, H, W]
+        returns: [B, out_feature_dim]
+        """
+
+        assert x.shape[1:] == self.images_shape, (
+            f"Expected input shape (C, H, W) = {self.images_shape}, got {x.shape[1:]}"
+        )
+
+        x = jax.vmap(self.dino_model.forward_features, in_axes=(0, None, None))(
+            x, rng, True
+        )
+        x = x["x_norm_patchtokens"]
+        x = jax.lax.stop_gradient(x)
+
+        x = einops.rearrange(
+            x, "B (H W) C -> B H W C", H=self.patch_hw, W=self.patch_hw
+        )
+
+        x = self.spatial_softmax(x)  # [B, out_feature_dim]
+        x = self.head(x)  # [B, out_feature_dim]
+
+        return x
+
+
 class RGBEncoder(nnx.Module):
     def __init__(self, images_shape: tuple, out_feature_dim: int, rngs: nnx.Rngs):
         """
@@ -412,7 +494,12 @@ class RGBEncoder(nnx.Module):
             rngs=rngs,
         )
 
-    def __call__(self, x):
+    def __call__(self, x, rng: Optional[PRNGKeyArray] = None):
+        """
+        x: [B, C, H, W]
+        returns: [B, out_feature_dim]
+        """
+
         x = einops.rearrange(x, "B C H W -> B H W C")
         x = self.encoder_stem(x)
         for block in self.encoder_blocks:

@@ -1,11 +1,11 @@
-from typing import Dict, Optional
+from typing import Dict
 
-import chex
 import einops
 import jax
 import jax.numpy as jnp
 import optax
 from flax import nnx
+from jaxtyping import Array, PRNGKeyArray
 from lerobot.utils.constants import ACTION, OBS_STATE
 from typing_extensions import override
 
@@ -13,6 +13,7 @@ from easy_bc.policies.flow_unet.configuration_flow_unet import FlowUnetConfig
 from easy_bc.policies.modules import (
     ConditionalUnet1D,
     Conv1DBlock,
+    DinoRGBEncoder,
     RGBEncoder,
     SinusoidalPosEmb,
 )
@@ -28,7 +29,10 @@ class FlowUnetPolicy(BasePolicy):
 
         self.config = config
 
-        action_dim = next(iter(self.config.output_features.values())).shape[0]
+        if self.config.action_feature:
+            action_dim = self.config.action_feature.shape[0]
+        else:
+            raise ValueError("Action feature must be defined in the configuration.")
 
         num_images = len(config.image_features)
         images_shape = next(iter(config.image_features.values())).shape  # C, H, W
@@ -45,10 +49,18 @@ class FlowUnetPolicy(BasePolicy):
             config.robot_state_feature.shape[0] if config.robot_state_feature else 0
         )
 
-        self.rgb_encoder = RGBEncoder(
-            images_shape=images_shape,
-            out_feature_dim=self.config.img_feature_dim,
-            rngs=rngs,
+        self.rgb_encoder = (
+            DinoRGBEncoder(
+                images_shape=images_shape,
+                out_feature_dim=self.config.img_feature_dim,
+                rngs=rngs,
+            )
+            if self.config.dino_encoder
+            else RGBEncoder(
+                images_shape=images_shape,
+                out_feature_dim=self.config.img_feature_dim,
+                rngs=rngs,
+            )
         )
 
         self.unet = ConditionalUnet1D(
@@ -127,7 +139,7 @@ class FlowUnetPolicy(BasePolicy):
         return v_t
 
     def get_conditional_embedding(
-        self, batch: Dict[str, jnp.ndarray], rng: Optional[chex.PRNGKey] = None
+        self, batch: Dict[str, jnp.ndarray], rng: PRNGKeyArray
     ) -> jnp.ndarray:
         state = batch[OBS_STATE]
 
@@ -137,6 +149,8 @@ class FlowUnetPolicy(BasePolicy):
         )  # B*N, C, H, W
 
         B = state.shape[0]
+
+        rng, crop_rng, encoder_rng = jax.random.split(rng, 3)
 
         if self.config.image_resolution:
             imgs_array = resize_with_pad(
@@ -148,11 +162,11 @@ class FlowUnetPolicy(BasePolicy):
             imgs_array = crop_image(
                 imgs_array,
                 shape=self.config.crop_shape,
-                random=False if rng is None else True,
-                rng=rng,
+                random=False if crop_rng is None else True,
+                rng=crop_rng,
             )  # B*N, C, H_crop, W_crop
 
-        img_feature = self.rgb_encoder(imgs_array)  # B*N, img_feature_dim
+        img_feature = self.rgb_encoder(imgs_array, encoder_rng)  # B*N, img_feature_dim
 
         img_feature = einops.rearrange(
             img_feature, "(b n) f -> b (n f)", b=B
@@ -165,10 +179,8 @@ class FlowUnetPolicy(BasePolicy):
         return cond
 
     @override
-    def compute_loss(
-        self, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
-    ) -> chex.Array:
-        noise_rng, time_rng, crop_rng = jax.random.split(rng, 3)
+    def compute_loss(self, batch: Dict[str, jnp.ndarray], rng: PRNGKeyArray) -> Array:
+        noise_rng, time_rng, cond_rng = jax.random.split(rng, 3)
 
         actions = batch[ACTION]  # B, H, action_dim
         B, H, _ = actions.shape
@@ -185,7 +197,7 @@ class FlowUnetPolicy(BasePolicy):
         x_t = time_expanded * noise + (1 - time_expanded) * actions  # B, H, action_dim
         u_t = noise - actions  # B, H, action_dim
 
-        cond = self.get_conditional_embedding(batch, rng=crop_rng)  # B, cond_dim
+        cond = self.get_conditional_embedding(batch, rng=cond_rng)  # B, cond_dim
 
         v_t = self.pred_action_flow(x_t, cond, time)  # B, H, action_dim
 
@@ -195,9 +207,11 @@ class FlowUnetPolicy(BasePolicy):
 
     @override
     def sample_action(
-        self, batch: Dict[str, jnp.ndarray], rng: chex.PRNGKey
+        self, batch: Dict[str, jnp.ndarray], rng: PRNGKeyArray
     ) -> jnp.ndarray:
-        cond = self.get_conditional_embedding(batch)  # B, cond_dim
+        rng, cond_rng, noise_rng = jax.random.split(rng, 3)
+
+        cond = self.get_conditional_embedding(batch, cond_rng)  # B, cond_dim
 
         B, H, action_dim = (
             cond.shape[0],
