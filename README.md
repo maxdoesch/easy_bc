@@ -13,7 +13,3 @@ A simple Python project for behavior cloning policies.
 ## Usage
 
 Install dependencies, then run `train.py` to train a policy.
-
-## License
-
-MIT License (add details if needed).
