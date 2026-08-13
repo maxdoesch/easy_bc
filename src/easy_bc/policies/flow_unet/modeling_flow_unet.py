@@ -139,7 +139,11 @@ class FlowUnetPolicy(BasePolicy):
         return v_t
 
     def get_conditional_embedding(
-        self, batch: Dict[str, jnp.ndarray], rng: PRNGKeyArray
+        self,
+        batch: Dict[str, jnp.ndarray],
+        rng: PRNGKeyArray,
+        *,
+        random_crop: bool,
     ) -> jnp.ndarray:
         state = batch[OBS_STATE]
 
@@ -162,8 +166,8 @@ class FlowUnetPolicy(BasePolicy):
             imgs_array = crop_image(
                 imgs_array,
                 shape=self.config.crop_shape,
-                random=False if crop_rng is None else True,
-                rng=crop_rng,
+                random=random_crop,
+                rng=crop_rng if random_crop else None,
             )  # B*N, C, H_crop, W_crop
 
         img_feature = self.rgb_encoder(imgs_array, encoder_rng)  # B*N, img_feature_dim
@@ -197,7 +201,9 @@ class FlowUnetPolicy(BasePolicy):
         x_t = time_expanded * noise + (1 - time_expanded) * actions  # B, H, action_dim
         u_t = noise - actions  # B, H, action_dim
 
-        cond = self.get_conditional_embedding(batch, rng=cond_rng)  # B, cond_dim
+        cond = self.get_conditional_embedding(
+            batch, rng=cond_rng, random_crop=True
+        )  # B, cond_dim
 
         v_t = self.pred_action_flow(x_t, cond, time)  # B, H, action_dim
 
@@ -211,7 +217,9 @@ class FlowUnetPolicy(BasePolicy):
     ) -> jnp.ndarray:
         rng, cond_rng, noise_rng = jax.random.split(rng, 3)
 
-        cond = self.get_conditional_embedding(batch, cond_rng)  # B, cond_dim
+        cond = self.get_conditional_embedding(
+            batch, cond_rng, random_crop=False
+        )  # B, cond_dim
 
         B, H, action_dim = (
             cond.shape[0],
