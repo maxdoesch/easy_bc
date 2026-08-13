@@ -213,14 +213,30 @@ def main(cfg: TrainConfig):
                 train_rng, step_rng = jax.random.split(train_rng)
 
                 loss = train_step(policy, batch, optimizer, step_rng)
+                step = i + 1
 
-                if i % cfg.log_freq == 0 or i == cfg.train_steps - 1:
+                if step == 1 or step % cfg.log_freq == 0 or step == cfg.train_steps:
                     loss_val = float(jax.block_until_ready(loss))
-                    wandb.log({"train/loss": loss_val}, step=i)
+                    wandb.log({"train/loss": loss_val}, step=step)
 
                     pbar.set_postfix(loss=f"{loss_val:.4f}")
 
-                if i > 0 and (i % cfg.eval_freq == 0 or i == cfg.train_steps - 1):
+                i = step
+                pbar.update(1)
+
+                _, policy_state = nnx.split(policy)
+                _, opt_state = nnx.split(optimizer)
+
+                mngr.save(
+                    i,
+                    args=ocp.args.Composite(
+                        policy=ocp.args.StandardSave(policy_state),  # pyright: ignore
+                        optimizer=ocp.args.StandardSave(opt_state),  # pyright: ignore
+                        step=ocp.args.JsonSave(i),  # pyright: ignore
+                    ),
+                )
+
+                if step % cfg.eval_freq == 0 or step == cfg.train_steps:
                     policy.eval()
                     eval_metrics = evaluator.evaluate(
                         policy=policy,
@@ -237,12 +253,12 @@ def main(cfg: TrainConfig):
                                 "eval/max_reward": np.mean(eval_metrics["max_rewards"]),
                                 "eval/success_rate": np.mean(eval_metrics["successes"]),
                             },
-                            step=i,
+                            step=step,
                         )
 
                         video_dir = ckpt_dir / "videos"
                         video_dir.mkdir(parents=True, exist_ok=True)
-                        video_path = video_dir / f"eval_{i:08d}.mp4"
+                        video_path = video_dir / f"eval_{step:08d}.mp4"
                         write_video_spawn(
                             video_path,
                             eval_metrics["video_frames"][0],
@@ -255,23 +271,8 @@ def main(cfg: TrainConfig):
                                     format="mp4",
                                 )
                             },
-                            step=i,
+                            step=step,
                         )
-
-                i += 1
-                pbar.update(1)
-
-                policy_gd, policy_state = nnx.split(policy)
-                opt_gd, opt_state = nnx.split(optimizer)
-
-                mngr.save(
-                    i,
-                    args=ocp.args.Composite(
-                        policy=ocp.args.StandardSave(policy_state),  # pyright: ignore
-                        optimizer=ocp.args.StandardSave(opt_state),  # pyright: ignore
-                        step=ocp.args.JsonSave(i),  # pyright: ignore
-                    ),
-                )
 
                 if i >= cfg.train_steps:
                     break

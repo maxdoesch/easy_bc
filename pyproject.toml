@@ -23,14 +23,14 @@ dependencies = [
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+fix = true
 
+[tool.ruff.lint]
 select = [
   "E",    # pycodestyle
   "F",    # pyflakes
   "I",    # isort
 ]
-
-fix = true
 
 [tool.basedpyright]
 typeCheckingMode = "basic"
@@ -43,6 +43,7 @@ reportUnusedCallResult = "none"
 [dependency-groups]
 dev = [
     "pytest>=9.0.1",
+    "ruff>=0.16.3",
 ]
 equimo = [
     "equimo>=0.4.7",

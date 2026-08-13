@@ -27,13 +27,13 @@ class EvalCfg:
 
     policy: str = tyro.MISSING
 
-    seed: int = 43
+    seed: int = 42
 
 
 def main(cfg: EvalCfg):
     init_rng = jax.random.PRNGKey(cfg.seed)
     policy_rngs = nnx.Rngs(jax.random.fold_in(init_rng, 0))
-    eval_rng = jax.random.fold_in(init_rng, 1)
+    eval_rng = jax.random.fold_in(init_rng, 2)
 
     policy_config = make_policy_config(
         cfg.policy, pretrained_path=cfg.checkpoint_path, device="cuda"

@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass, field
-from typing import List, Optional, TypedDict, cast
+from typing import Optional, TypedDict, cast
 
 import chex
 import jax
@@ -49,9 +49,16 @@ class EvalMetrics(TypedDict):
 
 
 class EnvConfigWrapper:
-    def __init__(self, env_cfg: EnvConfig, task_ids: List[int], **kwargs):
+    def __init__(
+        self,
+        env_cfg: EnvConfig,
+        task_ids: list[int],
+        include_task_ids: bool,
+        **kwargs,
+    ):
         self.env_cfg = env_cfg
         self.task_ids = task_ids
+        self.include_task_ids = include_task_ids
         self._override_kwargs = kwargs
 
     def __getattr__(self, name):
@@ -59,33 +66,51 @@ class EnvConfigWrapper:
 
     @property
     def gym_kwargs(self) -> dict:
-        return {
+        gym_kwargs = {
             **self.env_cfg.gym_kwargs,
             **self._override_kwargs,
-            "task_ids": self.task_ids,
         }
+        if self.include_task_ids:
+            gym_kwargs["task_ids"] = self.task_ids
+        return gym_kwargs
 
 
 class Evaluator:
     def __init__(self, cfg: EvaluatorConfig, policy_cfg: PreTrainedConfig):
         self.cfg = cfg
 
-        self.per_task_envs: List[VectorEnv] | None = None
+        self.per_task_envs: list[VectorEnv] | None = None
         self.env_cfg = None
 
         if self.cfg.env_id:
             self.env_cfg = make_env_config(env_type=self.cfg.env_id)
 
-            # hack to pass custom kwargs to environment construction
+            # Pass custom gym kwargs through the LeRobot environment config.
+            # `task_ids` is only a gym kwarg for multi-task builders such as LIBERO;
+            # single-task Gym envs like PushT reject it.
             self.env_cfg = cast(
                 EnvConfig,
                 EnvConfigWrapper(
-                    self.env_cfg, self.cfg.task_ids, **self.cfg.env_kwargs_dict
+                    self.env_cfg,
+                    self.cfg.task_ids,
+                    include_task_ids="libero" in self.env_cfg.type,
+                    **self.cfg.env_kwargs_dict,
                 ),
             )
             eval_envs_dict = make_env(self.env_cfg, n_envs=cfg.num_envs)
 
             suite_name = next(iter(eval_envs_dict))
+            missing_task_ids = [
+                task_id
+                for task_id in self.cfg.task_ids
+                if task_id not in eval_envs_dict[suite_name]
+            ]
+            if missing_task_ids:
+                raise ValueError(
+                    f"Task IDs {missing_task_ids} are not available for env "
+                    f"'{suite_name}'. Available task IDs: "
+                    f"{sorted(eval_envs_dict[suite_name])}"
+                )
             self.per_task_envs = [
                 eval_envs_dict[suite_name][task_id] for task_id in self.cfg.task_ids
             ]
